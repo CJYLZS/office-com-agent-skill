@@ -2,7 +2,7 @@
 
 AI agent skill for live Microsoft Office automation through Windows COM. Attach to already-open documents, read unsaved content, and perform guarded edits.
 
-面向 AI 编码助手的 Microsoft Office 实时 COM 自动化技能。**目前提供 Word 编辑工具、Excel 类型保真读取与局部风险检查，以及 PowerPoint 只读 MVP。**
+面向 AI 编码助手的 Microsoft Office 实时 COM 自动化技能。**目前提供 Word 编辑工具、Excel 类型保真读取与局部风险检查，以及 PowerPoint 有证据校验的交互编辑。**
 
 已经落地的第一版：通过 Python 直接连接 Microsoft Word 已打开的窗口，在**同一个内存文档**上读取和编辑，不是离线改 ZIP 再覆盖文件。
 
@@ -12,7 +12,7 @@ AI agent skill for live Microsoft Office automation through Windows COM. Attach 
 |---|---|---|
 | Word | 已实现连接、局部读取/查找、受限编辑与测试 | 持续完善复杂结构验证 |
 | Excel | 窗口绑定、工作表盘点、类型与错误值保真读取、局部风险检查 | 经验证的受控局部编辑 |
-| PowerPoint | 演示文稿身份绑定、按幻灯片/形状分页读取、按需表格与备注 | 最小文本范围编辑与结构复核 |
+| PowerPoint | 身份绑定、分页读取、文本/格式编辑、模板页复制、文本框、删除、导出与另存副本 | 持续扩展复杂对象与布局验证 |
 
 保持现有 Word 入口兼容；新增应用分别提供技能指令、应用适配器、辅助函数、官方 API 参考及独立集成测试。不假定 Word 的修订/撤销机制可迁移到 Excel 或 PowerPoint。优先只读连接，再实现默认预览、显式提交、写后验证；不自动保存、关闭或退出用户应用。
 
@@ -63,7 +63,7 @@ inspect 最多检查 20 格，提供有限矩形的保护、合并、数组公�
 
 独立 Excel 测试只修改自己创建的未保存实例，覆盖目标绑定、未保存内容、Unicode、类型、错误值与分块读取。真实用户工作簿仅做只读验证，未保存、修改或关闭。
 
-## PowerPoint 只读 MVP
+## PowerPoint 读取与交互编辑
 
 使用 [PowerPoint 指南](references/powerpoint-com-api.md) 与 [powerpoint_com.py](scripts/powerpoint_com.py)。支持未保存的演示文稿；通过明确 PID/HWND 绑定，读取时不依赖活动文稿。NativeOM 不可用时，通过 ROT 候选与类型库早绑定的文档窗口句柄，检查根窗口/PID 并要求唯一匹配。
 
@@ -76,7 +76,7 @@ inspect 最多检查 20 格，提供有限矩形的保护、合并、数组公�
 
 每次最多 50 张幻灯片、500 个形状（含备注）和 500 个按需表格单元格；单次文本读取最多 32,000 个原生 UTF-16 单位，累计最多 100,000。分页提供 next_offset；超预算报错，不发布伪完整结果。提供幻灯片/形状 ID、文字、摘要，表格单元格用所属表格与行列定位；组、图表、OLE 和 SmartArt 内部内容明确省略。schema_version=1，普通 CLI 有 9 秒 watchdog，import 函数没有硬超时。
 
-本机独立 live 测试已验证另一个演示文稿活动时仍能绑定指定未保存文稿，读取中文、表格、备注、ID 与分页；supervised read 实测 0.518 秒（含 Python 启动）。PowerPoint 隐藏 HWND getter 依赖安装版本；首次类型库生成约 6.5 秒，可能触及冷启动预算。缺少接口、ROT 不可见或多候选时明确失败。当前没有 PowerPoint 写入接口。
+本机独立 live 测试已验证另一个演示文稿活动时仍能绑定指定未保存文稿，读取中文、表格、备注、ID 与分页；supervised read 实测 0.518 秒（含 Python 启动）。PowerPoint 隐藏 HWND getter 依赖安装版本；首次类型库生成约 6.5 秒，可能触及冷启动预算。缺少接口、ROT 不可见或多候选时明确失败。编辑使用独立的 [powerpoint_tools.py](scripts/powerpoint_tools.py)，详见 [交互编辑指南](references/powerpoint-editing.md)。支持 replace_text / format_text / duplicate_slide / add_textbox / delete_slide / export_slide / save_copy；默认预览，显式 --commit，每项操作都重新绑定目标并复查局部证据，完成后复核。编辑不自动保存原文件，另存副本拒绝覆盖，失败或超时不重试。运行 tests/live_powerpoint_tools.py --run 可验证真实编辑流程（只使用自有临时演示文稿）。
 
 ## 跨应用安全约定
 

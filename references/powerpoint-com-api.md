@@ -44,6 +44,10 @@ Slide ID and shape ID plus index/name provide native evidence. Text includes SHA
 
 Groups/chart/OLE/SmartArt child content is explicitly omitted; no recursive traversal, link updating, embedded-object activation, OCR, chart series extraction, notes masters, themes or visual fidelity checks. Protected View, hidden presentations, slideshow-only frames, modal/busy Office, unregistered ROT instances, multiple process registrations or missing hidden HWND getter may not attach. Such cases report errors, not guessed targets.
 
+## Authorized editing extension
+
+The connection/read adapter remains read-only. Explicitly authorized edits use the separate [powerpoint_tools.py](../scripts/powerpoint_tools.py) interface and [interactive editing guide](powerpoint-editing.md): stable IDs, local preconditions, preview/commit, postconditions, template duplication, and separate no-overwrite exports/save-copy. Do not infer editing authorization from a successful read.
+
 ## Validation
 
 Use .venv/Scripts/python.exe -m unittest discover -s tests -p test_powerpoint_com.py -v and .venv/Scripts/python.exe tests/live_powerpoint.py --run.
