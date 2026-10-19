@@ -1,0 +1,7 @@
+.venv/
+artifacts/
+# One-off task scripts and local experiments
+tmp/
+*.docx
+__pycache__/
+*.pyc
