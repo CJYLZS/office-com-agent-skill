@@ -5,6 +5,10 @@ description: 在 Windows 中通过 Microsoft Word COM 连接用户已打开的�
 
 # Word COM 实时协同编辑
 
+## Excel 入口（只读 MVP）
+
+用户请求 Excel 时，先阅读 [Excel COM 指南](references/excel-com-api.md)，使用 scripts/excel_com.py 的 list/probe/read，不套用 Word 的 Range、修订、UndoRecord 或 apply。Excel 尚无写入接口。PowerPoint 尚未实现。
+
 ## 适用场景与前置条件
 
 用户明确要求操作桌面 Microsoft Word 已打开的文档，特别是未保存内容、修订、批注、实时可见编辑。不用于服务端无人值守，也不是多人实时 CRDT 引擎。

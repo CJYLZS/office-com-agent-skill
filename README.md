@@ -2,7 +2,7 @@
 
 AI agent skill for live Microsoft Office automation through Windows COM. Attach to already-open documents, read unsaved content, and perform guarded edits.
 
-面向 AI 编码助手的 Microsoft Office 实时 COM 自动化技能。**目前已实现 Word；Excel 和 PowerPoint 尚未实现。**
+面向 AI 编码助手的 Microsoft Office 实时 COM 自动化技能。**目前已实现 Word 编辑工具与 Excel 只读 MVP；PowerPoint 尚未实现。**
 
 已经落地的第一版：通过 Python 直接连接 Microsoft Word 已打开的窗口，在**同一个内存文档**上读取和编辑，不是离线改 ZIP 再覆盖文件。
 
@@ -11,7 +11,7 @@ AI agent skill for live Microsoft Office automation through Windows COM. Attach 
 | 应用 | 当前状态 | 下一步 |
 |---|---|---|
 | Word | 已实现连接、局部读取/查找、受限编辑与测试 | 持续完善复杂结构验证 |
-| Excel | 计划中，暂无实现 | 窗口/工作簿身份绑定、批量范围读取、受保护的局部值/公式写入 |
+| Excel | 只读窗口绑定、工作表盘点、有限区域值/公式读取 | 错误值类型保真与经授权的局部编辑 |
 | PowerPoint | 计划中，暂无实现 | 演示文稿身份绑定、按幻灯片/形状读取、最小文本范围编辑 |
 
 保持现有 Word 入口兼容；新增应用分别提供技能指令、应用适配器、辅助函数、官方 API 参考及独立集成测试。不假定 Word 的修订/撤销机制可迁移到 Excel 或 PowerPoint。优先只读连接，再实现默认预览、显式提交、写后验证；不自动保存、关闭或退出用户应用。
@@ -44,7 +44,22 @@ python -m venv .venv
 
 整个目录就是可复用 skill 包；保留 SKILL.md、scripts、references、README.md、requirements.txt 的相对布局。无需复制虚拟环境、测试结果或用户文档。这里尚未注册到 DSH 的全局技能目录：本会话可直接读取 SKILL.md 使用；在支持技能目录加载的客户端中，将此目录作为技能包注册即可。不要假定当前会话的技能列表已动态刷新。
 
-## 快速上手
+## Excel 只读 MVP
+
+使用 [Excel 指南](references/excel-com-api.md) 与 [excel_com.py](scripts/excel_com.py)。先 list，再按最新 PID/HWND probe，最后指定工作表名称与 A1 矩形 read。支持 --mode values/formulas/both，以及显式 --formula-api Formula2；默认使用兼容性较好的 Formula，不自动降级。
+
+~~~powershell
+& './.venv/Scripts/python.exe' scripts/excel_com.py list
+& './.venv/Scripts/python.exe' scripts/excel_com.py probe --pid <PID> --hwnd <HWND>
+& './.venv/Scripts/python.exe' scripts/excel_com.py read --pid <PID> --hwnd <HWND> --sheet Sheet1 --range A1:D20 --output artifacts/excel-read.json
+& './.venv/Scripts/python.exe' tests/live_excel.py --run
+~~~
+
+最多 10,000 个单元格，每次 COM 属性传输最多 100 格，累计字符串上限 1,000,000 字符。普通 CLI 用 9 秒父进程 watchdog；import 函数与内部 --worker 入口没有硬超时。不会扫描 UsedRange、逐格读取、Calculate/Refresh/Open/Save/Close/Quit。含无法解码的 VT_ERROR 时整个读取显式失败，不伪造数值；值读取不是显示文本，日期为数字，公式接口也会返回常量。JSON 成功报告按临时文件原子替换；失败或超时可能保留旧报告，必须检查当前退出码与身份，不能复用旧文件当新结果。
+
+独立 Excel 测试只修改自己创建的未保存实例，覆盖另一个工作簿处于活动状态的目标绑定、未保存内容、原生生成 emoji、数字/布尔、单格/行/列、公式结果、错误值显式失败与分块读取。真实用户工作簿仅做只读验证，未保存、修改或关闭。
+
+## Word 快速上手
 
 ~~~powershell
 & './.venv/Scripts/python.exe' scripts/word_com.py list

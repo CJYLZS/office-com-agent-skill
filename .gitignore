@@ -3,5 +3,11 @@ artifacts/
 # One-off task scripts and local experiments
 tmp/
 *.docx
+*.xlsx
+*.xlsm
+*.xlsb
+*.xls
+*.pptx
+*.pptm
 __pycache__/
 *.pyc
