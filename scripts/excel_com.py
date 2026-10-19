@@ -4,6 +4,8 @@ import argparse
 import ctypes
 import hashlib
 import json
+import math
+from functools import lru_cache
 import os
 import tempfile
 from pathlib import Path
@@ -87,6 +89,115 @@ def matrix(value, rows, columns):
                 except UnicodeEncodeError as exc:
                     raise ValueError('Unpaired Unicode surrogate; refusing to publish damaged text') from exc
     return result
+
+
+ERROR_NAMES = {2000: '#NULL!', 2007: '#DIV/0!', 2015: '#VALUE!', 2023: '#REF!',
+               2029: '#NAME?', 2036: '#NUM!', 2042: '#N/A', 2043: '#GETTING_DATA',
+               2045: '#SPILL!', 2050: '#CALC!'}
+
+
+@lru_cache(maxsize=1)
+def automation_api():
+    """Local ABI bindings; never replace comtypes' global VARIANT decoder."""
+    dll = ctypes.WinDLL('oleaut32')
+    signatures = {
+        'SafeArrayGetDim': (ctypes.c_uint, [ctypes.c_void_p]),
+        'SafeArrayGetLBound': (ctypes.c_long, [ctypes.c_void_p, ctypes.c_uint, ctypes.POINTER(ctypes.c_long)]),
+        'SafeArrayGetUBound': (ctypes.c_long, [ctypes.c_void_p, ctypes.c_uint, ctypes.POINTER(ctypes.c_long)]),
+        'SafeArrayGetElement': (ctypes.c_long, [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long), ctypes.c_void_p]),
+        'SysStringLen': (ctypes.c_uint, [ctypes.c_void_p]),
+        'VariantClear': (ctypes.c_long, [ctypes.c_void_p]),
+    }
+    for name, (restype, argtypes) in signatures.items():
+        function = getattr(dll, name)
+        function.restype, function.argtypes = restype, argtypes
+    return dll
+
+
+def check_hresult(hr):
+    if hr < 0:
+        raise ValueError(f'Automation API failed: HRESULT={hr}')
+
+
+def decode_scalar(raw):
+    """Decode only explicitly supported scalar VARTYPEs, with no numeric error guessing."""
+    vt = int(raw.vt)
+    if vt in (0, 1):
+        value, kind = None, ('empty' if vt == 0 else 'null')
+    elif vt == 10:
+        scode = int(raw._.VT_I4)
+        code = scode & 0xffffffff
+        excel_code = code & 0xffff if (code & 0xffff0000) == 0x800a0000 else code
+        value = {'type': 'excel_error', 'scode': scode, 'scode_hex': f'0x{code:08X}',
+                 'excel_code': excel_code, 'name': ERROR_NAMES.get(excel_code)}
+        kind = 'error'
+    elif vt == 8:
+        ptr = raw._.c_void_p
+        size = automation_api().SysStringLen(ptr) if ptr else 0
+        # Read length-counted UTF-16, not NUL-terminated wchar or Python codepoint length.
+        value = ctypes.string_at(ptr, size * 2).decode('utf-16-le') if ptr else ''
+        value.encode('utf-8')
+        kind = 'string'
+    elif vt == 11:
+        value, kind = bool(raw._.VT_BOOL), 'boolean'
+    elif vt in (2, 3, 4, 5, 16, 17, 18, 19, 20, 21, 22, 23):
+        value, kind = raw.value, 'number'
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError('Non-finite COM number')
+    else:
+        raise ValueError(f'Unsupported COM VARTYPE {vt}; refusing implicit conversion')
+    return value, {'kind': kind, 'vartype': vt}
+
+
+def decode_variant(raw, rows, columns):
+    """Copy a scalar/2D SAFEARRAY(VARIANT), retaining each element's original vt."""
+    if int(raw.vt) != 0x200c:
+        if rows != 1 or columns != 1:
+            raise ValueError('Expected two-dimensional SAFEARRAY(VARIANT)')
+        value, info = decode_scalar(raw)
+        return [[value]], [[info]]
+    from comtypes.automation import VARIANT
+    api, ptr = automation_api(), raw._.c_void_p
+    if not ptr or api.SafeArrayGetDim(ptr) != 2:
+        raise ValueError('Expected two-dimensional SAFEARRAY(VARIANT)')
+    lower = []
+    for dimension, expected in ((1, rows), (2, columns)):
+        lo, hi = ctypes.c_long(), ctypes.c_long()
+        check_hresult(api.SafeArrayGetLBound(ptr, dimension, ctypes.byref(lo)))
+        check_hresult(api.SafeArrayGetUBound(ptr, dimension, ctypes.byref(hi)))
+        if hi.value - lo.value + 1 != expected:
+            raise ValueError('SAFEARRAY shape differs from requested range')
+        lower.append(lo.value)
+    values, types = [], []
+    for r in range(rows):
+        value_row, type_row = [], []
+        for c in range(columns):
+            element = VARIANT()
+            try:
+                indices = (ctypes.c_long * 2)(lower[0]+r, lower[1]+c)
+                check_hresult(api.SafeArrayGetElement(ptr, indices, ctypes.byref(element)))
+                value, info = decode_scalar(element)
+                value_row.append(value)
+                type_row.append(info)
+            finally:
+                check_hresult(api.VariantClear(ctypes.byref(element)))
+        values.append(value_row)
+        types.append(type_row)
+    return values, types
+
+
+def read_property(tile, prop, rows, columns):
+    """Property-get with an owned raw result; no global monkeypatch or fallback guessing."""
+    from comtypes.automation import IDispatch, VARIANT, DISPPARAMS, EXCEPINFO, IID_NULL
+    dispatch = tile.QueryInterface(IDispatch)
+    result, params, exception, argument = VARIANT(), DISPPARAMS(), EXCEPINFO(), ctypes.c_uint()
+    try:
+        dispatch._IDispatch__com_Invoke(dispatch.GetIDsOfNames(prop)[0], ctypes.byref(IID_NULL),
+                                       0, 2, ctypes.byref(params), ctypes.byref(result),
+                                       ctypes.byref(exception), ctypes.byref(argument))
+        return decode_variant(result, rows, columns)
+    finally:
+        check_hresult(automation_api().VariantClear(ctypes.byref(result)))
 
 
 def normalized_hwnd(value):
@@ -220,29 +331,82 @@ def read_range(wb, sheet_name, address, mode='both', formula_api='Formula'):
     if mode in ('formulas', 'both'):
         properties.append(('formulas_or_constants', formula_api))
     data = {key: [[None] * cols for _ in range(rows)] for key, _ in properties}
+    types = {key: [[None] * cols for _ in range(rows)] for key, _ in properties}
     text_chars = 0
     for r, c, height, width, tile_address in range_tiles(bounds['address']):
         tile = sheet.Range(tile_address)
         for key, prop in properties:
-            try:
-                values = matrix(getattr(tile, prop), height, width)
-            except NotImplementedError as exc:
-                raise ValueError('COM variant cannot be decoded (Excel error cells/VT_ERROR unsupported); narrow scope or use formulas mode') from exc
+            values, value_types = read_property(tile, prop, height, width)
             text_chars += sum(len(item) for row in values for item in row if isinstance(item, str))
             if text_chars > MAX_TEXT_CHARS:
                 raise ValueError('Text budget exceeded after bounded COM transfer; narrow the rectangle')
             for i, row in enumerate(values):
                 data[key][r+i][c:c+width] = row
+                types[key][r+i][c:c+width] = value_types[i]
     # Sequential reads are not atomic. This digest is evidence, not a revision token/edit permit.
-    payload = json.dumps(data, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(',', ':'))
+    payload = json.dumps({'data': data, 'types': types}, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(',', ':'))
     return {'sheet': {'name': str(sheet.Name), 'code_name': str(sheet.CodeName)},
             **bounds, 'mode': mode, 'formula_api': formula_api if mode != 'values' else None,
-            'data': data, 'data_sha256': hashlib.sha256(payload.encode('utf-8', errors='surrogatepass')).hexdigest(),
+            'data': data, 'types': types, 'hash_scope': 'canonical_json_data_and_types_v2', 'data_sha256': hashlib.sha256(payload.encode('utf-8', errors='surrogatepass')).hexdigest(),
             'truncated': False,
             'warnings': ['Sequential live reads, not an atomic snapshot or edit authorization.',
-                         'Value2 dates/currency are numeric; undecodable Excel error cells fail the entire read.',
-                         'Formula output also includes constants; not a per-cell formula/type mask.',
+                         'Value2 dates/currency are numeric; errors carry original VT_ERROR/SCODE, not numeric guesses.',
+                         'Formula output includes constants; types describe returned VARIANTs, not a formula mask.',
                          'No calculation/refresh or formatted display text; no structural edit safety check.']}
+
+
+def inspect_range(wb, sheet_name, address):
+    """Read-only, conservative <=20-cell risk evidence. Never an edit authorization."""
+    bounds = parse_address(address, max_cells=20)
+    if not isinstance(sheet_name, str) or not sheet_name:
+        raise ValueError('Explicit worksheet name required')
+    sheet = wb.Worksheets.Item(sheet_name)
+    if str(sheet.Name) != sheet_name:
+        raise ValueError('Worksheet name must match exactly')
+    rng = sheet.Range(bounds['address'])
+    if (int(rng.Rows.Count) != bounds['rows'] or int(rng.Columns.Count) != bounds['columns']
+            or int(rng.Areas.Count) != 1):
+        raise ValueError('COM range differs from requested rectangle')
+    blockers, checks = [], {}
+    def require_false(label, get):
+        try:
+            value = get()
+            checks[label] = value if type(value) is bool else None
+            if type(value) is not bool or value is not False:
+                blockers.append(label + ': true/mixed/unknown')
+        except Exception:
+            checks[label] = None
+            blockers.append(label + ': unavailable')
+    for name in ('ReadOnly', 'ProtectStructure', 'HasVBProject', 'MultiUserEditing'):
+        require_false('workbook.'+name, lambda name=name: getattr(wb, name))
+    for name in ('ProtectContents', 'ProtectDrawingObjects', 'ProtectScenarios'):
+        require_false('sheet.'+name, lambda name=name: getattr(sheet, name))
+    # Deliberately reject whole-sheet table/pivot/query contexts instead of guessing
+    # overlap from incomplete aggregate Range.ListObject semantics.
+    for name in ('ListObjects', 'PivotTables', 'QueryTables'):
+        try:
+            collection = getattr(sheet, name)
+            if name == 'PivotTables':
+                collection = collection()
+            count = collection.Count
+            checks['sheet.'+name] = count if type(count) is int else None
+            if type(count) is not int or count != 0:
+                blockers.append('sheet.'+name+': nonempty/unknown')
+        except Exception:
+            checks['sheet.'+name] = None
+            blockers.append('sheet.'+name+': unavailable')
+    for r in range(1, bounds['rows']+1):
+        for c in range(1, bounds['columns']+1):
+            cell = rng.Cells.Item(r, c)
+            for name in ('MergeCells', 'HasArray', 'HasSpill', 'HasFormula'):
+                require_false(f'cell[{r},{c}].{name}', lambda name=name, cell=cell: getattr(cell, name))
+    snapshot = read_range(wb, sheet_name, bounds['address'])
+    return {'sheet': snapshot['sheet'], **bounds, 'checks': checks, 'blockers': blockers,
+            'checked_structure_clear': not blockers, 'write_authorized': False,
+            'snapshot': snapshot,
+            'warnings': ['Read-only risk evidence, not a complete structural audit or write permit.',
+                         'Unknown/unavailable/mixed properties fail closed; old Excel without HasSpill is blocked.',
+                         'Events/add-ins/recalculation and concurrent changes cannot be ruled out; hash is not a lock.']}
 
 
 def main():
@@ -250,7 +414,7 @@ def main():
         if hasattr(stream, 'reconfigure'):
             stream.reconfigure(encoding='utf-8')
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('command', choices=['list', 'probe', 'read'])
+    p.add_argument('command', choices=['list', 'probe', 'read', 'inspect'])
     p.add_argument('--pid', type=int)
     p.add_argument('--hwnd', type=int)
     p.add_argument('--document', help='Expected FullName of already-open workbook; never opens it')
@@ -271,8 +435,8 @@ def main():
             return 2
     try:
         t = time.perf_counter()
-        if a.command == 'read':
-            parse_address(a.address)
+        if a.command in ('read', 'inspect'):
+            parse_address(a.address, max_cells=20 if a.command == 'inspect' else MAX_CELLS)
             if not a.sheet:
                 raise ValueError('--sheet required')
         bridge = ExcelBridge()
@@ -282,16 +446,21 @@ def main():
         else:
             wb, target = bridge.select(a.pid, a.hwnd, a.document)
             before_saved = bool(wb.Saved)
-            data = probe(wb, a.offset, a.limit) if a.command == 'probe' else read_range(wb, a.sheet, a.address, a.mode, a.formula_api)
+            if a.command == 'probe':
+                data = probe(wb, a.offset, a.limit)
+            elif a.command == 'inspect':
+                data = inspect_range(wb, a.sheet, a.address)
+            else:
+                data = read_range(wb, a.sheet, a.address, a.mode, a.formula_api)
             # Rebind for end-of-read identity check, not a concurrency lock.
             _, current = bridge.select(a.pid, a.hwnd, target['full_name'])
             if current != target:
                 raise ValueError('Workbook identity changed during read')
             data['saved_before'] = before_saved
             data['saved_after'] = bool(wb.Saved)
-        report = {'schema_version': 1, 'status': 'ok', 'operation': a.command, 'target': target,
+        report = {'schema_version': 2, 'status': 'ok', 'operation': a.command, 'target': target,
                   'elapsed_seconds': round(time.perf_counter()-t, 3),
-                  'limits': {'max_cells': MAX_CELLS, 'max_text_chars': MAX_TEXT_CHARS, 'supervised_cli_timeout_seconds': 9, 'max_cells_per_com_read': MAX_CELLS_PER_COM_READ}, 'data': data}
+                  'limits': {'max_cells': MAX_CELLS, 'max_inspect_cells': 20, 'max_text_chars': MAX_TEXT_CHARS, 'supervised_cli_timeout_seconds': 9, 'max_cells_per_com_read': MAX_CELLS_PER_COM_READ}, 'data': data}
         output = json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False)
         if a.output:
             a.output.parent.mkdir(parents=True, exist_ok=True)
@@ -308,7 +477,7 @@ def main():
         print(output)
         return 0
     except Exception as exc:
-        print(json.dumps({'schema_version': 1, 'status': 'error', 'operation': a.command,
+        print(json.dumps({'schema_version': 2, 'status': 'error', 'operation': a.command,
                           'error': str(exc), 'type': type(exc).__name__}, ensure_ascii=False), file=sys.stderr)
         return 1
 

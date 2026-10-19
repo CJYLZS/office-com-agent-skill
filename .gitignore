@@ -9,5 +9,9 @@ tmp/
 *.xls
 *.pptx
 *.pptm
+*.ppt
+*.pps
+*.ppsx
+*.ppsm
 __pycache__/
 *.pyc
