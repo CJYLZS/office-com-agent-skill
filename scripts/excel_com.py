@@ -106,6 +106,7 @@ def automation_api():
         'SafeArrayGetUBound': (ctypes.c_long, [ctypes.c_void_p, ctypes.c_uint, ctypes.POINTER(ctypes.c_long)]),
         'SafeArrayGetElement': (ctypes.c_long, [ctypes.c_void_p, ctypes.POINTER(ctypes.c_long), ctypes.c_void_p]),
         'SysStringLen': (ctypes.c_uint, [ctypes.c_void_p]),
+        'SysFreeString': (None, [ctypes.c_void_p]),
         'VariantClear': (ctypes.c_long, [ctypes.c_void_p]),
     }
     for name, (restype, argtypes) in signatures.items():
@@ -186,6 +187,16 @@ def decode_variant(raw, rows, columns):
     return values, types
 
 
+def clear_exception_strings(exception):
+    """Free caller-owned EXCEPINFO BSTRs without creating temporary BSTR owners."""
+    for name in ('bstrSource', 'bstrDescription', 'bstrHelpFile'):
+        slot = ctypes.c_void_p.from_address(ctypes.addressof(exception) + getattr(type(exception), name).offset)
+        pointer = slot.value
+        if pointer:
+            automation_api().SysFreeString(pointer)
+            slot.value = None
+
+
 def read_property(tile, prop, rows, columns):
     """Property-get with an owned raw result; no global monkeypatch or fallback guessing."""
     from comtypes.automation import IDispatch, VARIANT, DISPPARAMS, EXCEPINFO, IID_NULL
@@ -197,7 +208,17 @@ def read_property(tile, prop, rows, columns):
                                        ctypes.byref(exception), ctypes.byref(argument))
         return decode_variant(result, rows, columns)
     finally:
-        check_hresult(automation_api().VariantClear(ctypes.byref(result)))
+        primary_error = sys.exc_info()[1]
+        try:
+            try:
+                check_hresult(automation_api().VariantClear(ctypes.byref(result)))
+            finally:
+                clear_exception_strings(exception)
+        except Exception as cleanup_error:
+            if primary_error is None:
+                raise
+            if hasattr(primary_error, 'add_note'):
+                primary_error.add_note(f'COM result cleanup failed: {cleanup_error}')
 
 
 def normalized_hwnd(value):

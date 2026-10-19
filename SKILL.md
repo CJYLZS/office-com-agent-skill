@@ -110,4 +110,4 @@ description: 在 Windows 中通过 Microsoft Office COM 连接已打开的 Word�
 - [官方 API 参考](references/word-com-api.md)
 - [使用与测试说明](README.md)
 - 单元测试：python -m unittest discover -s tests -v。
-- 独立 Word 集成测试：python tests/live_smoke.py --run。仅该测试允许创建自己的 Word 实例，关闭时不保存；禁止拿用户文档做写入测试。
+- 独立 Word 集成测试：python tests/live_smoke.py --run。该测试只创建自己的 Word 实例，关闭时不保存。Excel/PowerPoint 各自 live 测试的对象所有权和清理规则见对应 API 指南；所有 Office live 测试都禁止用用户文档做写入测试。

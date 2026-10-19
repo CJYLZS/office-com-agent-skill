@@ -49,6 +49,12 @@ class Tests(unittest.TestCase):
         s=shape('abc')
         s.TextFrame.TextRange.Characters=lambda a,b:self.fail('must not retrieve')
         with self.assertRaises(ValueError): Budget(2).text(s)
+    def test_utf16_budget_rechecks_supplementary_characters(self):
+        s=shape('placeholder')
+        s.TextFrame.TextRange.Length=2
+        s.TextFrame.TextRange.Characters=lambda a,b:N(Text='😀😀')
+        with self.assertRaisesRegex(ValueError, 'UTF-16 budget'):
+            Budget(2).text(s)
     def test_shape_pages(self):
         r=read_shapes(Collection([shape(),shape(),shape()]),2,1,Budget())
         self.assertEqual(r['next_offset'],3)

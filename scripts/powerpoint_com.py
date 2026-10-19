@@ -186,8 +186,9 @@ class Budget:
         # Never retrieve the entire Text property before checking native Length.
         text = str(text_range.Characters(1, length).Text) if length else ''
         text.encode('utf-8')  # Reject invalid surrogate output, not silently corrupt evidence.
-        if len(text) > length or len(text) > self.remaining:
-            raise ValueError('Text changed or exceeded budget during read')
+        utf16_length = len(text.encode('utf-16-le')) // 2
+        if utf16_length > length or utf16_length > self.remaining:
+            raise ValueError('Text changed or exceeded UTF-16 budget during read')
         self.remaining -= length  # Conservative native UTF-16 length budget.
         return {'text': text, 'text_sha256': hashlib.sha256(text.encode('utf-8')).hexdigest(),
                 'native_length': length}

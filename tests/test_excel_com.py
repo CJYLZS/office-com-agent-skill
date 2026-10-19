@@ -8,6 +8,19 @@ from unittest.mock import Mock, patch
 
 
 class AddressTests(unittest.TestCase):
+    def test_exception_bstr_cleanup_is_idempotent(self):
+        import ctypes
+        from comtypes.automation import EXCEPINFO
+        from excel_com import clear_exception_strings
+        exception = EXCEPINFO()
+        for name, pointer in [('bstrSource', 101), ('bstrDescription', 202), ('bstrHelpFile', 303)]:
+            ctypes.c_void_p.from_address(ctypes.addressof(exception) + getattr(EXCEPINFO, name).offset).value = pointer
+        api = SimpleNamespace(SysFreeString=Mock())
+        with patch('excel_com.automation_api', return_value=api):
+            clear_exception_strings(exception)
+            clear_exception_strings(exception)
+        self.assertEqual([call.args[0] for call in api.SysFreeString.call_args_list], [101, 202, 303])
+
     def test_single_cell_and_absolute_rectangle(self):
         self.assertEqual(parse_address('b3'), {'address': 'B3:B3', 'rows': 1, 'columns': 1})
         self.assertEqual(parse_address('$A$1:$D$20'), {'address': 'A1:D20', 'rows': 20, 'columns': 4})
