@@ -2,7 +2,7 @@
 
 AI agent skill for live Microsoft Office automation through Windows COM. Attach to already-open documents, read unsaved content, and perform guarded edits.
 
-面向 AI 编码助手的 Microsoft Office 实时 COM 自动化技能。**目前提供 Word 编辑工具、Excel 类型保真读取与局部风险检查，以及 PowerPoint 有证据校验的交互编辑。**
+面向 AI 编码助手的 Microsoft Office 实时 COM 自动化技能。**目前提供 Word 编辑工具、Excel 类型保真读取与受控交互编辑，以及 PowerPoint 有证据校验的交互编辑。**
 
 已经落地的第一版：通过 Python 直接连接 Microsoft Word 已打开的窗口，在**同一个内存文档**上读取和编辑，不是离线改 ZIP 再覆盖文件。
 
@@ -11,7 +11,7 @@ AI agent skill for live Microsoft Office automation through Windows COM. Attach 
 | 应用 | 当前状态 | 下一步 |
 |---|---|---|
 | Word | 已实现连接、局部读取/查找、受限编辑与测试 | 持续完善复杂结构验证 |
-| Excel | 窗口绑定、工作表盘点、类型与错误值保真读取、局部风险检查 | 经验证的受控局部编辑 |
+| Excel | 窗口绑定、类型保真读取、值/公式/基础格式编辑、局部计算与另存副本 | 扩展受支持版本与复杂结构验证 |
 | PowerPoint | 身份绑定、分页读取、文本/格式编辑、模板页复制、文本框、删除、导出与另存副本 | 持续扩展复杂对象与布局验证 |
 
 保持现有 Word 入口兼容；新增应用分别提供技能指令、应用适配器、辅助函数、官方 API 参考及独立集成测试。不假定 Word 的修订/撤销机制可迁移到 Excel 或 PowerPoint。优先只读连接，再实现默认预览、显式提交、写后验证；不自动保存、关闭或退出用户应用。
@@ -25,6 +25,10 @@ AI agent skill for live Microsoft Office automation through Windows COM. Attach 
 - [requirements.txt](requirements.txt)：运行依赖（comtypes）。项目环境额外装有 pywin32，当前实现不依赖它。
 - [tests/test_word_com.py](tests/test_word_com.py)：请求验证单元测试。
 - [tests/live_smoke.py](tests/live_smoke.py)：显式 --run 的独立 Word 实例集成测试，不修改用户文档、不保存测试文档。
+- [scripts/excel_tools.py](scripts/excel_tools.py) 与 [Excel 交互编辑指南](references/excel-editing.md)：受控局部值/公式/格式编辑、计算与另存副本。
+- [tests/test_excel_tools.py](tests/test_excel_tools.py) 与 [tests/live_excel_tools.py](tests/live_excel_tools.py)：Excel 编辑 mock 回归与显式 --run 的自有工作簿测试。
+- [scripts/powerpoint_tools.py](scripts/powerpoint_tools.py) 与 [PowerPoint 交互编辑指南](references/powerpoint-editing.md)：分页读取、文本/格式编辑、复制页、文本框、导出与另存副本。
+- [tests/test_powerpoint_tools.py](tests/test_powerpoint_tools.py) 与 [tests/live_powerpoint_tools.py](tests/live_powerpoint_tools.py)：PowerPoint 编辑 mock 回归与真实 COM 编辑测试。
 
 ## 入库范围
 
@@ -45,23 +49,35 @@ python -m venv .venv
 
 整个目录就是可复用 skill 包；保留 SKILL.md、scripts、references、README.md、requirements.txt 的相对布局。无需复制虚拟环境、测试结果或用户文档。这里尚未注册到 DSH 的全局技能目录：本会话可直接读取 SKILL.md 使用；在支持技能目录加载的客户端中，将此目录作为技能包注册即可。不要假定当前会话的技能列表已动态刷新。
 
-## Excel 类型读取与局部风险检查
+## Excel 类型读取与受控交互编辑
 
-使用 [Excel 指南](references/excel-com-api.md) 与 [excel_com.py](scripts/excel_com.py)。先 list，再按最新 PID/HWND probe，最后指定工作表名称与 A1 矩形 read。支持 --mode values/formulas/both，以及显式 --formula-api Formula2；默认使用兼容性较好的 Formula，不自动降级。
+使用 [Excel 只读指南](references/excel-com-api.md) 与 [excel_com.py](scripts/excel_com.py) 连接、盘点、类型保真读取和局部风险检查。支持 --mode values/formulas/both，以及显式 --formula-api Formula2；默认使用兼容性较好的 Formula，不自动降级。
+
+授权编辑使用独立的 [excel_tools.py](scripts/excel_tools.py) 和 [Excel 交互编辑指南](references/excel-editing.md)。先读取局部证据，默认预览，显式提交，写后复核；原工作表不保存、不关闭。
 
 ~~~powershell
 & './.venv/Scripts/python.exe' scripts/excel_com.py list
 & './.venv/Scripts/python.exe' scripts/excel_com.py probe --pid <PID> --hwnd <HWND>
 & './.venv/Scripts/python.exe' scripts/excel_com.py read --pid <PID> --hwnd <HWND> --sheet Sheet1 --range A1:D20 --output artifacts/excel-read.json
 & './.venv/Scripts/python.exe' scripts/excel_com.py inspect --pid <PID> --hwnd <HWND> --sheet Sheet1 --range A1:D5
+& './.venv/Scripts/python.exe' scripts/excel_tools.py read --pid <PID> --hwnd <HWND> --document 'D:/文档/示例.xlsx' --sheet 月度预算 --range A1:D11 --spill-policy bounded_scalar_sheet
+& './.venv/Scripts/python.exe' scripts/excel_tools.py apply --request artifacts/excel-request.json
+& './.venv/Scripts/python.exe' scripts/excel_tools.py apply --request artifacts/excel-request.json --commit
 & './.venv/Scripts/python.exe' tests/live_excel.py --run
+& './.venv/Scripts/python.exe' tests/live_excel_tools.py --run
 ~~~
 
-最多 10,000 个单元格，每次 COM 属性传输最多 100 格，累计字符串上限 1,000,000 字符。普通 CLI 用 9 秒父进程 watchdog；import 函数与内部 --worker 入口没有硬超时。不会扫描 UsedRange、Calculate/Refresh/Open/Save/Close/Quit。schema_version=2：data 保留值/公式，types 提供每格 kind/vartype；VT_ERROR 用带原始 SCODE 的标记对象表示，摘要同时覆盖 data 与 types。日期仍为数值，公式接口也会返回常量，类型信息不等于公式掩码。JSON 成功报告按临时文件原子替换；失败或超时可能保留旧报告，必须检查当前退出码与身份，不能复用旧文件当新结果。
+只读读取最多 10,000 个单元格，每次 COM 属性传输最多 100 格，累计字符串上限 1,000,000 字符；普通 CLI 用 9 秒 watchdog。编辑层把单次范围限制为 100 格。schema_version=2：data 保留值/公式，types 提供每格 kind/vartype；VT_ERROR 用带原始 SCODE 的标记对象表示。
 
-inspect 最多检查 20 格，提供有限矩形的保护、合并、数组公式、溢出、公式及表/查询环境风险证据。属性未知或无法读取就产生 blocker；本机 HasSpill 不可用，不能据此放行通用编辑。尚无 Excel apply/save 接口。
+编辑支持 set_values、set_formulas、format_range、calculate_range 和 save_copy。写入值支持 null、bool、有限数字和有界 Unicode 文本；非 BMP 字符使用长度计数 UTF-16 BSTR，避免本环境普通 setter 的截断。公式只接受局部算术和单个有界 SUM，不接受其他函数、外部引用、动态数组、@ 或 #。格式支持数字格式、字体、粗体、字号、颜色、填充、对齐和单列列宽。
 
-独立 Excel 测试只修改自己创建的未保存实例，覆盖目标绑定、未保存内容、Unicode、类型、错误值与分块读取。真实用户工作簿仅做只读验证，未保存、修改或关闭。
+默认 spill_policy=native 要求原生 HasSpill 可读且为 False。本机 Excel 16.0 Build 14026.0 读取该属性会抛异常，因此默认拒绝编辑。显式 spill_policy=bounded_scalar_sheet 会要求整个 UsedRange 不超过 100 格、每格 HasArray=False、所有公式都在受限标量文法内；这是完整局部标量清单，不是 HasSpill=False 或动态数组能力声明。超过预算或出现未知结构就拒绝。
+
+另存副本使用 SaveCopyAs 单参数签名，要求绝对新 .xlsx 路径、父目录存在、源为无宏原生工作簿，不覆盖已有文件，也不改变源工作簿 Saved 状态。失败或超时返回 WriteOutcomeUnknown；不自动重试、回滚或 Undo。
+
+本机验证：17 项 Excel 编辑 mock 测试、跨应用合计 87 项；10 组真实 Excel 测试通过；真实测试总耗时约 4.43 秒，CLI read 0.319 秒（含 Python 启动）。保存的预算示例含 1 个工作表、44 个单元格、9 个公式，合计 7500/7250/250；包结构、公式缓存、类型和格式已用 openpyxl 复核。LibreOffice 对该工作簿的预览返回空白图，按渲染失败处理，未据此修改工作簿，也不声称完成视觉检查。
+
+独立 Excel 测试只修改自己创建的未保存或自有副本工作簿，覆盖目标绑定、Unicode、公式、格式、保护/合并/数组拒绝、副本不覆盖和 CLI；不修改或关闭用户工作簿，也不 Quit 共享 Excel。
 
 ## PowerPoint 读取与交互编辑
 

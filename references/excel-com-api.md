@@ -40,9 +40,9 @@ VT_ERROR 输出对象，例如 {"type":"excel_error","scode":2007,"scode_hex":"0
 
 ## 写入评估与限制
 
-本轮交付只读增强和 inspect，不暴露 apply/commit。实测当前 Excel 对 HasSpill 报属性缺失，无法证明普通目标格不处于溢出结构；这被明确列为 blocker，不解释为 False。即使结构检查全通过，VBA 外的事件、COM/XLL 加载项、自动计算和并发修改仍可能产生副作用。只读摘要不是写许可或锁。
+本文件描述的 excel_com.py 保持只读，不暴露 apply/commit；授权编辑使用独立 [Excel 交互编辑扩展](excel-editing.md)。当前 Excel 对 HasSpill 报异常，在原 inspect 中继续作为 blocker，不解释为 False。即使结构检查全通过，VBA 外的事件、COM/XLL 加载项、自动计算和并发修改仍可能产生副作用。只读摘要不是写许可或锁。
 
-后续写入需在受支持 Excel 上验证溢出检查，绑定完整身份及表 CodeName/范围，原值+公式+类型 hash 二次复核；默认预览、显式 commit。初版宜只允许单格已有有限数字/布尔常量，拒绝公式、字符串、空值和所有未知结构，读取回验值与类型。文本写入必须独立解决并验证 UTF-16 BSTR 长度：本环境 comtypes scalar setter 曾截断 emoji，嵌套 tuple 也不能保证 Excel 矩形 SAFEARRAY。不可复制未经验证的 setter。当写入超时或回验失败，必须报告结果未知、禁止自动重试；不承诺自动回滚或无事件副作用，不更改全局应用设置。
+编辑扩展绑定完整身份及表 CodeName/范围，原值、公式、类型和相关格式证据二次复核；默认预览、显式 commit。本环境 comtypes scalar setter 曾截断 emoji，文本写入因此使用经真实验证的长度计数 UTF-16 BSTR；不依赖嵌套 tuple 的矩形 SAFEARRAY 推断。具体结构边界、公式语法和兼容性证明见编辑指南。写入超时或回验失败报告结果未知，禁止自动重试；不承诺自动回滚或无事件副作用，不更改全局应用设置。
 
 字符串预算在每次最多 100 格的 COM 结果后累计检查，并非传输前或内存硬限制。值与公式及分块顺序读取，不是原子快照。摘要不包含全部格式/结构。普通 CLI worker 有 9 秒 watchdog，终止客户端不保证服务器停止；--worker 内部入口及 import API 无硬超时。超时后不连续重试。Saved 前后相等仅辅助证据。
 

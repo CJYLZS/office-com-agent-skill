@@ -7,9 +7,11 @@ description: 在 Windows 中通过 Microsoft Office COM 连接已打开的 Word�
 
 保留历史技能标识 word-com-collab 以兼容已有注册。按应用选择下列入口；Word 正文规则不自动适用于 Excel 或 PowerPoint。
 
-## Excel 入口（类型读取与风险检查）
+## Excel 入口（类型读取与交互编辑）
 
-用户请求 Excel 时，先阅读 [Excel COM 指南](references/excel-com-api.md)，使用 scripts/excel_com.py 的 list/probe/read/inspect。schema_version=2，错误值是带 SCODE 的标记对象，types 单独记录原生类型；摘要包含 data 和 types。inspect 的 unknown/unavailable/mixed 均产生 blocker，它不是写许可。Excel 尚无写入接口，不套用 Word 的 Range、修订、UndoRecord 或 apply。
+用户请求 Excel 时，先阅读 [Excel COM 指南](references/excel-com-api.md)，使用 scripts/excel_com.py 的 list/probe/read/inspect。schema_version=2，错误值是带 SCODE 的标记对象，types 单独记录原生类型；摘要包含 data 和 types。inspect 的 unknown/unavailable/mixed 均产生 blocker，它不是写许可。用户授权编辑后阅读 [Excel 交互编辑指南](references/excel-editing.md)，使用独立 scripts/excel_tools.py；按表名/CodeName/有限 A1 矩形读取证据，默认预览、显式提交、写后复核。值和公式分开写入，计算与另存副本为单独操作。未知保护/数组/溢出结构拒绝编辑；不要套用 Word 的 Range、修订或 UndoRecord。
+
+Excel 编辑请求使用完整 target 和单项 operation，expected_sha256 来自同一局部读取。默认 spill_policy=native 要求原生 HasSpill 可读且为 False；当前本机读取该属性抛异常，必须显式选择 bounded_scalar_sheet，且整个 UsedRange 不超过 100 格、HasArray 全为 False、所有既有公式都在受限标量文法内。这个证明不等于 HasSpill=False，也不验证动态数组。文本写入使用长度计数 UTF-16 BSTR；空字符串用 null 清空。公式只接受局部算术和单个有界 SUM。格式失败或提交异常返回 WriteOutcomeUnknown，禁止重试、回滚或 Undo。另存副本不覆盖、不建父目录、不改变源 Saved 状态。
 
 ## PowerPoint 入口（读取与交互编辑）
 
@@ -19,9 +21,9 @@ description: 在 Windows 中通过 Microsoft Office COM 连接已打开的 Word�
 
 ## 适用场景与前置条件
 
-用户明确要求操作桌面 Microsoft Word 已打开的文档，特别是未保存内容、修订、批注、实时可见编辑。不用于服务端无人值守，也不是多人实时 CRDT 引擎。
+用户明确要求操作桌面 Microsoft Word、Excel 或 PowerPoint 已打开的文档，特别是未保存内容、修订/批注、实时可见编辑。不用于服务端无人值守，也不是多人实时 CRDT 引擎。
 
-- Windows，桌面 Microsoft Word，与用户 Word 相同登录会话/完整性权限级别。
+- Windows，桌面 Microsoft Office，与用户 Office 相同登录会话/完整性权限级别。
 - 使用本 skill 所在目录的项目 Python：
   ~~~powershell
   & './.venv/Scripts/python.exe' scripts/word_com.py list
@@ -110,4 +112,7 @@ description: 在 Windows 中通过 Microsoft Office COM 连接已打开的 Word�
 - [官方 API 参考](references/word-com-api.md)
 - [使用与测试说明](README.md)
 - 单元测试：python -m unittest discover -s tests -v。
-- 独立 Word 集成测试：python tests/live_smoke.py --run。该测试只创建自己的 Word 实例，关闭时不保存。Excel/PowerPoint 各自 live 测试的对象所有权和清理规则见对应 API 指南；所有 Office live 测试都禁止用用户文档做写入测试。
+- 独立 Word 集成测试：python tests/live_smoke.py --run。该测试只创建自己的 Word 实例，关闭时不保存。
+- Excel 编辑测试：python tests/live_excel_tools.py --run，只编辑自有工作簿，不 Quit 共享 Excel。
+- PowerPoint 编辑测试：python tests/live_powerpoint_tools.py --run，只编辑自有临时演示文稿。
+- 所有 Office live 测试都禁止用用户文档做写入测试；对象所有权和清理规则见对应 API 指南。
