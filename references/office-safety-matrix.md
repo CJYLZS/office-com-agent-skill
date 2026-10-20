@@ -19,10 +19,14 @@
 | 保护拒绝 | ProtectionType 初始检查 | 工作簿/工作表，提交前复查 | 仅 ReadOnly，无独立 Protected View 证明 |
 | 部分写入抛错，不重试/不 Undo | WriteOutcomeUnknown（RuntimeError 子类） | WriteOutcomeUnknown | WriteOutcomeUnknown |
 | 写后身份丢失 | 结果未知 | 结果未知 | 结果未知 |
+| 跨应用异常类型 | 同一个 WriteOutcomeUnknown | 同左 | 同左 |
+| 重绑定拒绝标记 | 未尝试写入 | 未尝试写入 | 未尝试写入 |
 
-本轮单元测试 122 项：121 项通过，1 项未支持契约以显式 skip 保留，不把 skip 计为通过。其中共用契约测试 20 项（19 通过、1 跳过），Excel 能力探测测试 15 项通过。
+本轮单元测试 128 项：127 项通过，1 项未支持契约以显式 skip 保留，不把 skip 计为通过。其中共用契约测试 26 项（25 通过、1 跳过），Excel 能力探测测试 15 项通过。
 
 Word 现在与另外两个应用同层：读取前、提交前和写后都会重新解析原生窗口；解析失败在写前是拒绝（未尝试写入），写后是 WriteOutcomeUnknown。撤销分组和修订设置恢复仍不是事务或回滚。省略 bridge 的旧调用保留原有成功路径与较弱证据，但失败也统一为 WriteOutcomeUnknown（RuntimeError 子类，消息文本已变），CLI 报告 status=unknown。只有真正发出写入调用后才判为 unknown：撤销记录内、写入前的最后一次拒绝仍是 ValueError。
+
+三个应用现在共用 [office_com.py](../scripts/office_com.py) 的一层底座：同一个 WriteOutcomeUnknown 类、同一套身份解析与重绑定算法、同一个文本摘要函数。因此“未知结果”可以写一次 except 就覆盖 Word、Excel 与 PowerPoint，之前三份同名类是各自独立的对象，跨应用捕获只能退化成 RuntimeError。写前拒绝的模板带“未尝试写入”标记（Word 中文默认，Excel/PowerPoint 英文），写后未知的模板由 rebind_after_write 单独传入，三者都不含该标记——写已经发出时不得声称未尝试写入。模板可覆盖，分类逻辑只有一份。PowerPoint 的读证据摘要与提交比较使用同一个 text_hash(strict=True)，严格编码拒绝损坏文本是有意保留的差异。
 
 ## Excel 能力探测
 
@@ -41,11 +45,13 @@ Word 现在与另外两个应用同层：读取前、提交前和写后都会重
 
 仅创建并清理测试自己拥有的文档，三套 live 编辑测试都不调用 Application.Quit。Word 原有两个 runner 的 Quit 已移除，避免从 CreateObject 错误推断进程所有权。
 
+这条边界有可观察的代价：不 Quit 会留下私有 Word 进程，需要时手动关闭；PowerPoint 是单实例应用，上一次运行残留的空框架会被下一次复用，不再产生新的顶层窗口。live_powerpoint_tools.py 现在先检查已有框架并显式拒绝，提示先关闭 PowerPoint，而不是在断言处给出难以解释的空列表。
+
 | 应用 | 本机结果 | 已测端到端局部 CLI 耗时 |
 |---|---|---|
-| Word | live_smoke 11 组 + live_tools 5 组通过（含写前拒绝与 CLI apply） | CLI apply 预览 0.155 秒 / 提交 0.211 秒（含 Python 启动） |
+| Word | live_smoke 11 组 + live_tools 5 组通过（含写前拒绝与 CLI apply） | CLI apply 预览约 0.16–0.17 秒 / 提交约 0.21–0.23 秒（含 Python 启动，多次运行） |
 | Excel | 编辑与能力探测 11 组通过；最终复测整套约 5.46 秒 | read 0.365 秒；四格 capabilities native 0.314 秒 / 小表策略 0.325 秒 |
-| PowerPoint | 13 组通过 | preview 0.506 秒 |
+| PowerPoint | 13 组通过（需先关闭残留 PowerPoint 框架） | preview 约 0.46 秒 |
 
 上述耗时包含对应 CLI Python 启动；整套测试耗时不是单次检查耗时。测试环境、Office 冷启动、类型库生成、文档结构均可能影响耗时。CLI watchdog 不保证 Excel/PowerPoint 服务端停止调用；直接 import 函数没有硬超时。10 秒是简单检查的验收目标，不是所有操作的无条件 SLA。
 

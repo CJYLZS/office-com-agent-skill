@@ -42,7 +42,7 @@ Excel 编辑请求使用完整 target 和单项 operation，expected_sha256 来�
 5. 提交时请用户暂停键入。正文 hash 不是版本号：不覆盖格式、批注或其他 story 的变化，也不是原子锁。检测到冲突必须重新阅读和规划，不能自动套新 hash 重试。
 6. 优先用 find 返回的 Word Range.Start/End；它们是 Word 原生 story 坐标，不是 Python 字符串下标。emoji、域、修订可能影响映射，禁止用 len/str.find 推导任意坐标。
 7. 正文替换/插入强制临时开启 TrackRevisions，结束恢复原设置；不接受/拒绝既有修订。格式修改不保证生成修订，批注也不是修订。
-8. 使用 UndoRecord 分组，但它不是事务。CLI 的 apply 会通过 WordBridge 重新枚举原生窗口，校验 PID/HWND/完整路径后才写入；解析不到或身份不符属于写前拒绝（未尝试写入），写入后再次解析失败返回 status=unknown，需人工检查，不自动重试或 Undo。直接 import 调用 apply_request(doc, identity, req, commit, bridge=...) 才有这层重绑定；省略 bridge 的旧调用只比较身份副本和正文摘要，证据更弱。两者的失败分类一致：写入调用发出前是 ValueError 拒绝，发出后是 WriteOutcomeUnknown。失败可能部分执行，不盲目重试、不自动 Undo（可能误撤用户操作）。报告并请用户检查。一次 COM 写入失败后，先重新 list/read 核验是否已改变，再决定下一步。
+8. 使用 UndoRecord 分组，但它不是事务。CLI 的 apply 会通过 WordBridge 重新枚举原生窗口，校验 PID/HWND/完整路径后才写入；解析不到或身份不符属于写前拒绝（未尝试写入），写入后再次解析失败返回 status=unknown，需人工检查，不自动重试或 Undo。直接 import 调用 apply_request(doc, identity, req, commit, bridge=...) 才有这层重绑定；省略 bridge 的旧调用只比较身份副本和正文摘要，证据更弱。两者的失败分类一致：写入调用发出前是 ValueError 拒绝，发出后是 WriteOutcomeUnknown。三个应用抛出的是 scripts/office_com.py 里的同一个类，写一次 except 即覆盖 Word、Excel 与 PowerPoint。失败可能部分执行，不盲目重试、不自动 Undo（可能误撤用户操作）。报告并请用户检查。一次 COM 写入失败后，先重新 list/read 核验是否已改变，再决定下一步。
 9. 脚本不会自动保存、关闭文档或退出用户 Word；AutoSave 仍可能自行落盘。只有明确授权保存才执行 save。不要调整全局警告、信任中心、宏策略。
 10. 通用编辑器拒绝受保护/只读文档、表格内编辑，以及含域/内容控件正文的通用修改；复杂结构需单独检查并开发专用方法，不应移除保护或展平对象。
 

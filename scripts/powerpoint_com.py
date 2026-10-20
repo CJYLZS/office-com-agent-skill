@@ -2,7 +2,6 @@
 from __future__ import annotations
 import argparse
 import ctypes
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -10,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from word_com import WordBridge
+from office_com import OfficeBridge, normalized_hwnd, text_hash
 
 MAX_SLIDES = 50
 MAX_SHAPES = 500
@@ -18,10 +17,6 @@ MAX_CELLS = 500
 MAX_TEXT_CHARS = 100000
 MAX_TEXT_PER_READ = 32000
 MAX_BIND_WINDOWS = 100
-
-
-def normalized_hwnd(value):
-    return int(value) & 0xffffffff
 
 
 def page(offset, limit, maximum):
@@ -56,7 +51,7 @@ def matching_presentations(app, hwnd, expected_pid, root_hwnd, window_pid, early
     return matches[0]
 
 
-class PowerPointBridge(WordBridge):
+class PowerPointBridge(OfficeBridge):
     # Only reuse Win32 signatures, label(), pid(); not Word attachment/selection.
     def windows(self):
         result = []
@@ -190,7 +185,8 @@ class Budget:
         if utf16_length > length or utf16_length > self.remaining:
             raise ValueError('Text changed or exceeded UTF-16 budget during read')
         self.remaining -= length  # Conservative native UTF-16 length budget.
-        return {'text': text, 'text_sha256': hashlib.sha256(text.encode('utf-8')).hexdigest(),
+        # Same digest as apply-time checks: evidence and verification cannot drift.
+        return {'text': text, 'text_sha256': text_hash(text, strict=True),
                 'native_length': length}
 
 

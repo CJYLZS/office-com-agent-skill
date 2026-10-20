@@ -47,6 +47,15 @@ def main(argv=None):
 
     bridge = PowerPointBridge()
     before_windows = bridge.windows()
+    # PowerPoint is a single-instance application: an existing frame is reused, so
+    # no owned top-level window appears and every later assertion loses its target.
+    # This suite never quits the shared instance, so close PowerPoint and re-run.
+    if before_windows:
+        raise SystemExit(json.dumps({
+            'status': 'error',
+            'error': 'A PowerPoint frame already exists; close PowerPoint and re-run',
+            'windows': before_windows,
+        }, ensure_ascii=False))
     # PowerPoint is a singleton; this does NOT imply ownership of Application.
     app = CreateObject('PowerPoint.Application', dynamic=True)
     owned, passed = [], []

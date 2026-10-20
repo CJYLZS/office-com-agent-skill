@@ -438,6 +438,36 @@ class OfficeSafetyContractTests(unittest.TestCase):
                 self.assertEqual(len(f.writes()), 2 if cls is ExcelFixture else 1)
                 f.assert_no_lifecycle(self)
 
+    def test_postwrite_rebind_failure_never_claims_no_write(self):
+        def lost(call):
+            if call == 3:
+                raise RuntimeError("no native window after the write")
+
+        for cls in (WordFixture, ExcelFixture, PowerPointFixture):
+            with self.subTest(app=cls.name):
+                f = self.fixture(cls)
+                f.bridge.on_select = lost
+                with self.assertRaises(f.unknown) as error:
+                    f.apply(commit=True)
+                text = str(error.exception)
+                # The write was already issued: this must never read as a refusal.
+                self.assertNotIn("未尝试写入", text)
+                self.assertTrue("部分" in text or "partial" in text, text)
+                self.assertIsInstance(error.exception.__cause__, RuntimeError)
+                self.assertEqual(len(f.writes()), 2 if cls is ExcelFixture else 1)
+                f.assert_no_lifecycle(self)
+
+    def test_postwrite_identity_change_message_differs_from_refusal(self):
+        for cls in (WordFixture, ExcelFixture, PowerPointFixture):
+            with self.subTest(app=cls.name):
+                f = self.fixture(cls)
+                identity = f.native_identity()
+                f.bridge.on_select = lambda n: identity.update(hwnd=999) if n == 3 else None
+                with self.assertRaises(f.unknown) as error:
+                    f.apply(commit=True)
+                self.assertNotIn("未尝试写入", str(error.exception))
+                self.assertEqual(f.bridge.calls, 3)
+
     def test_word_rebind_failure_is_prewrite_refusal_not_unknown(self):
         f = self.fixture(WordFixture)
         f.bridge.fail_on = 2
@@ -452,6 +482,63 @@ class OfficeSafetyContractTests(unittest.TestCase):
             w.apply_request(f.doc, "not-a-dict", f.req, True, bridge=f.bridge)
         self.assertEqual(f.writes(), [])
         f.assert_no_lifecycle(self)
+
+    def test_one_unknown_outcome_type_is_shared_by_every_app(self):
+        import office_com
+
+        self.assertIs(w.WriteOutcomeUnknown, office_com.WriteOutcomeUnknown)
+        self.assertIs(x.WriteOutcomeUnknown, office_com.WriteOutcomeUnknown)
+        self.assertIs(p.WriteOutcomeUnknown, office_com.WriteOutcomeUnknown)
+        self.assertTrue(issubclass(office_com.WriteOutcomeUnknown, RuntimeError))
+        # A handler written for one application must catch another's outcome.
+        f = self.fixture(ExcelFixture)
+        f.fail_write()
+        with self.assertRaises(w.WriteOutcomeUnknown) as error:
+            f.apply(commit=True)
+        self.assertIsInstance(error.exception, x.WriteOutcomeUnknown)
+        self.assertEqual(len(f.writes()), 1)
+
+    def test_every_bridge_and_helper_comes_from_the_shared_core(self):
+        import excel_com
+        import office_com
+        import powerpoint_com
+
+        for bridge in (w.WordBridge, excel_com.ExcelBridge, powerpoint_com.PowerPointBridge):
+            self.assertIs(bridge.__mro__[1], office_com.OfficeBridge, bridge.__name__)
+        self.assertIs(excel_com.normalized_hwnd, office_com.normalized_hwnd)
+        self.assertIs(powerpoint_com.normalized_hwnd, office_com.normalized_hwnd)
+
+    def test_text_hash_is_shared_but_powerpoint_refuses_damaged_text(self):
+        import office_com
+
+        for text in ("Hello", "中文😀\r", ""):
+            self.assertEqual(w.text_hash(text), office_com.text_hash(text))
+            self.assertEqual(p.text_hash(text), office_com.text_hash(text))
+        # Word hashes a damaged surrogate so evidence still covers it; PowerPoint
+        # refuses instead of turning damaged text into an editable evidence value.
+        self.assertEqual(len(w.text_hash("\ud800")), 64)
+        with self.assertRaises(UnicodeEncodeError):
+            p.text_hash("\ud800")
+        with self.assertRaises(ValueError):
+            office_com.text_hash(3)
+
+    def test_rebind_loss_is_a_marker_labelled_refusal_in_every_app(self):
+        def lost(call):
+            if call == 2:
+                raise RuntimeError("no native window for this target")
+
+        for cls in (WordFixture, ExcelFixture, PowerPointFixture):
+            with self.subTest(app=cls.name):
+                f = self.fixture(cls)
+                f.bridge.on_select = lost
+                with self.assertRaises(ValueError) as error:
+                    f.apply(commit=True)
+                # The same documented marker and the same non-unknown class everywhere.
+                self.assertNotIsInstance(error.exception, w.WriteOutcomeUnknown)
+                self.assertIn("未尝试写入", str(error.exception))
+                self.assertIsInstance(error.exception.__cause__, RuntimeError)
+                self.assertEqual(f.writes(), [])
+                f.assert_no_lifecycle(self)
 
     def test_word_preview_rebinds_once_and_commit_resolves_again(self):
         f = self.fixture(WordFixture)

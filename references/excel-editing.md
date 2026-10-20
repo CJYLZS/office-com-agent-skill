@@ -6,7 +6,7 @@
 
 1. 先运行 excel_com.py list，取得当前 PID/HWND；不要用 ActiveWorkbook、ActiveSheet、Selection 或标题猜目标。
 2. 读取时使用工作表名称、CodeName 和有限 A1 矩形。按“盘点 → 局部证据 → 预览 → 显式提交 → 写后复核”推进。
-3. 提交前重新绑定完整身份并重读局部证据，提交后再读取原生值、公式和格式。
+3. 提交前重新绑定完整身份并重读局部证据，提交后再读取原生值、公式和格式。重绑定与 Word、PowerPoint 共用 office_com.py 的同一算法：解析不到或身份不符一律是写前拒绝（消息含“未尝试写入”，异常类型 ValueError），写后解析失败才是结果未知。
 4. 需要公式结果时，对明确范围执行 Range.Calculate，并检查业务预期。计算不是全表刷新的授权。
 5. 另存副本是单独操作。原文件不保存、不关闭，输出拒绝覆盖。
 
@@ -70,7 +70,7 @@ probe_capabilities(wb, sheet_spec, address, spill_policy="native")。
 
 - read_edit_range(wb, sheet_spec, address, spill_policy="native")：最多 100 格，返回原名/CodeName、A1 地址、值、类型、公式掩码、公式、相关格式、结构检查和 sha256。
 - apply_request(bridge, request, commit=False)：默认只预览；commit=True 才执行一次写入并复核。
-- WriteOutcomeUnknown：写入已尝试，但失败或写后复核失败。禁止自动重试、回滚或 Undo；先重新读取。
+- WriteOutcomeUnknown：写入已尝试，但失败或写后复核失败。禁止自动重试、回滚或 Undo；先重新读取。它与 Word、PowerPoint 抛出的是 office_com.py 里的同一个类，跨应用写一次 except 即可。
 
 请求结构：
 

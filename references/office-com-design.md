@@ -9,6 +9,18 @@
 3. **操作层**：每个编辑请求只处理一项小操作；默认预览，显式提交。验证身份、原值、公式和相关结构；拒绝未知结构，不通过移除保护、展平内容或更改全局设置绕过。
 4. **证据层**：结构化 JSON 包含操作、目标、耗时、范围、局限与数据摘要。摘要覆盖什么必须写清楚；没有读到的格式、外链、对象和其他区域不受摘要保护。
 
+## 共享内核
+
+[office_com.py](../scripts/office_com.py) 承载三个应用共用的最小底座，应用适配器只保留自己的窗口类、绑定、证据与 CLI：
+
+- **一个异常类型**：WriteOutcomeUnknown 由 office_com 定义，Word、Excel、PowerPoint 抛出的是同一个类，调用方写一次 except 即覆盖三者。
+- **一个文本摘要**：text_hash 默认按 surrogatepass 编码（Word 场景，损坏的代理项仍要被证据覆盖）；PowerPoint 传 strict=True，拒绝把损坏文本哈希成可编辑证据。
+- **一套重绑定算法**：_resolve 只做原生枚举与身份解析，两种后果由不同函数决定——rebind 用于写入前，失败一律是拒绝（未尝试写入）；rebind_after_write 用于写入后，同样的失败是 WriteOutcomeUnknown，且**不会**复用写前模板，所以“未尝试写入”不会出现在已发出写入的错误里。
+- **一层 Win32 底座**：OfficeBridge 只提供 EnumWindows/GetClassNameW/GetWindowThreadProcessId 与 oleacc 签名；WordBridge/ExcelBridge/PowerPointBridge 各自实现 windows/attach/select。
+- **可覆盖的消息模板**：rebind 接受 refusal/mismatch 模板，rebind_after_write 接受 label/message 模板。写前模板由 Word 用中文默认值，Excel 与 PowerPoint 用英文并保留“未尝试写入”标记；写后模板三者都用各自语言的“已发出写入、可能部分完成”，都不含该标记。PowerPoint 的读证据摘要也走 text_hash(strict=True)，与提交时比较的是同一个函数。
+
+三个适配器的 apply_request 签名仍不统一（Word 是 apply_request(doc, identity, req, commit, bridge=)，Excel/PowerPoint 是 apply_request(bridge, request, commit)），这是既有兼容面，暂不改动。
+
 ## 共同请求与结果约定
 
 Word 既有入口保持兼容；Excel 与 PowerPoint 的新编辑层共享以下约定，领域字段分别定义，不强行共用 COM 对象模型。

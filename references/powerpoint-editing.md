@@ -69,11 +69,13 @@ result = apply_request(bridge, request, commit=True)
 & ./.venv/Scripts/python.exe tests/live_powerpoint_tools.py --run
 ~~~
 
-CLI 输出 JSON 到 stdout；--target 文件直接包含完整 target 对象，--request 包含 target/operation。默认 9 秒监督超时；较慢导出/另存可显式 --timeout（1..120 秒）。import 和内部 --worker 不带硬超时。超时只终止调用方，不证明 PowerPoint 服务端停止。提交可能部分完成，报告 WriteOutcomeUnknown，不自动重试。
+CLI 输出 JSON 到 stdout；--target 文件直接包含完整 target 对象，--request 包含 target/operation。默认 9 秒监督超时；较慢导出/另存可显式 --timeout（1..120 秒）。import 和内部 --worker 不带硬超时。超时只终止调用方，不证明 PowerPoint 服务端停止。提交可能部分完成，报告 WriteOutcomeUnknown，不自动重试；它与 Word、Excel 用的是 office_com.py 里同一个类，拒绝消息保留英文措辞并带“未尝试写入”标记。
+
+live_powerpoint_tools.py 需要没有残留 PowerPoint 框架：PowerPoint 是单实例应用，先前的空框架会被复用而不产生新的顶层窗口，脚本现在会显式拒绝并提示先关闭，而不是在断言处失败。
 
 ## 本轮验证结果
 
-70 项跨应用单元测试通过，其中新增 PowerPoint 编辑测试 29 项。独立真实 PowerPoint 编辑集成测试 13 组通过，覆盖另一文稿活动时的精确目标、预览不变、文本与字体保留、局部替换、混合格式/旧证据拒绝、复制移动、可编辑文本框/格式、图片导出、两个 Saved 状态下的另存副本、不覆盖、删除和其他文稿不变。完整监督 CLI 预览实测 0.516 秒（含 Python 启动）。测试源 ReadOnly 为原生 int 0；仅关闭自有临时文稿，未 Quit。
+128 项单元测试（127 通过、1 项未支持契约跳过）通过，其中 PowerPoint 编辑测试 29 项。独立真实 PowerPoint 编辑集成测试 13 组通过，覆盖另一文稿活动时的精确目标、预览不变、文本与字体保留、局部替换、混合格式/旧证据拒绝、复制移动、可编辑文本框/格式、图片导出、两个 Saved 状态下的另存副本、不覆盖、删除和其他文稿不变。完整监督 CLI 预览实测约 0.46 秒（含 Python 启动）。测试源 ReadOnly 为原生 int 0；仅关闭自有临时文稿，未 Quit。
 
 实际模板创作另完成 6 页演示文稿，逐页读取并检查原生 PNG，保存后共享结构检查通过，并用独立库重新打开确认 44 个非空可编辑文本形状、标题顺序与无遗留占位文字。任务内容、成品、源模板、快照和临时脚本全部留在被忽略目录，不随工具发布。
 

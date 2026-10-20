@@ -20,6 +20,7 @@ AI agent skill for live Microsoft Office automation through Windows COM. Attach 
 
 - [SKILL.md](SKILL.md)：给 AI 的可复用指令与安全流程。
 - [跨应用设计约定](references/office-com-design.md)：连接、观察、操作、证据分层与性能/故障边界。
+- [scripts/office_com.py](scripts/office_com.py)：三个应用共用的底座——唯一的 WriteOutcomeUnknown、文本摘要、原生身份重绑定与 Win32 窗口枚举。
 - [scripts/word_com.py](scripts/word_com.py)：连接、读取、查找、编辑、保存 CLI，也可 import 使用。
 - [references/word-com-api.md](references/word-com-api.md)：微软官方 API 参考、参数及陷阱。
 - [requirements.txt](requirements.txt)：运行依赖（comtypes）。项目环境额外装有 pywin32，当前实现不依赖它。
@@ -33,7 +34,7 @@ AI agent skill for live Microsoft Office automation through Windows COM. Attach 
 - [Excel 能力探测](scripts/excel_capabilities.py)：区分属性名解析、getter 可读和当前结构证据；通过 excel_tools.py capabilities 使用，不试写、不授权、不自动降级。
 - [跨应用安全回归](tests/test_office_safety_contract.py) 与 [能力与失败边界](references/office-safety-matrix.md)：明确已覆盖行为和仍未对齐的契约。
 
-本轮安全回归：单元测试共 122 项，121 项通过、1 项显式未支持跳过；能力探测 15 项、共用契约 20 项。真实自有文档回归：Word 11+5 组、Excel 11 组、PowerPoint 13 组通过。未覆盖的保护视图、模态对话框、Word 原生重绑定等不计为通过，详见 [能力与失败边界](references/office-safety-matrix.md)。
+本轮安全回归：单元测试共 128 项，127 项通过、1 项显式未支持跳过；能力探测 15 项、共用契约 26 项。真实自有文档回归：Word 11+5 组、Excel 11 组、PowerPoint 13 组通过。未覆盖的受保护视图、模态对话框与超时故障注入不计为通过，详见 [能力与失败边界](references/office-safety-matrix.md)。
 
 ## 入库范围
 

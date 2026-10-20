@@ -14,7 +14,6 @@ unknown write outcome. Inspect native readback before preparing any next request
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -23,6 +22,8 @@ import subprocess
 import sys
 import tempfile
 
+from office_com import WriteOutcomeUnknown, rebind, rebind_after_write
+from office_com import text_hash as _text_digest
 from powerpoint_com import PowerPointBridge, Budget, MAX_SHAPES, MAX_TEXT_PER_READ
 
 MAX_SLIDE_SCAN = 500
@@ -31,13 +32,13 @@ FONT_FIELDS = {'name': 'Name', 'name_far_east': 'NameFarEast', 'size': 'Size',
                'bold': 'Bold', 'italic': 'Italic', 'underline': 'Underline'}
 
 
-class WriteOutcomeUnknown(RuntimeError):
-    """A write was attempted; inspect manually, without automatic retry/rollback."""
-
-
 def text_hash(text):
-    """SHA256 of exact UTF-8 text; no newline or Unicode normalization."""
-    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+    """SHA256 of exact UTF-8 text; no newline or Unicode normalization.
+
+    Strict encoding rejects unpaired surrogates: PowerPoint text is either exact
+    or damaged, and damaged text must not be hashed into an editable evidence.
+    """
+    return _text_digest(text, strict=True)
 
 
 def _positive(value, label):
@@ -128,13 +129,19 @@ def read_shape(presentation, slide_id, shape_id):
     return result
 
 
-def _target(bridge, expected):
+REFUSED = ('Target cannot be rebound natively ({stage}); no write attempted '
+           '(未尝试写入). Reread and replan: {error}')
+IDENTITY_CHANGED = ('Native identity changed ({stage}); no write attempted '
+                    '(未尝试写入). Reread and replan.')
+WRITE_LOST = ('Write attempted, but the target cannot be rebound afterwards, so the '
+              'outcome may be partial. Do not retry or undo automatically; inspect '
+              '{label} first: {error}')
+
+
+def _target(bridge, expected, stage='读取前'):
     if not isinstance(expected, dict) or expected.get('application') != 'powerpoint':
         raise ValueError('A full PowerPointBridge target identity is required')
-    presentation, identity = bridge.select(expected['pid'], expected['hwnd'], expected['full_name'])
-    if identity != expected:
-        raise ValueError('Target identity changed; reread and replan')
-    return presentation, identity
+    return rebind(bridge, expected, stage, refusal=REFUSED, mismatch=IDENTITY_CHANGED)
 
 
 def _expect_ids(collection, attr, maximum, expected):
@@ -309,7 +316,9 @@ def _file_write(presentation, slide, op):
         staged.unlink()
         stage_dir.rmdir()
     except Exception as exc:
-        raise WriteOutcomeUnknown(f'File write/publication failed; inspect destination and staging {staged}: {exc}') from exc
+        raise WriteOutcomeUnknown(
+            f'File write/publication failed; inspect destination and staging {staged}. '
+            f'No retry or rollback: {exc}') from exc
     return {'path': str(path)}
 
 
@@ -444,13 +453,15 @@ def apply_request(bridge, request, commit=False):
               'saved_in_place': False, 'evidence': evidence}
     if not commit:
         return result
-    presentation, identity = _target(bridge, expected)
+    presentation, identity = _target(bridge, expected, '提交前')
     fresh, resolved = _plan(presentation, op)
     if fresh != evidence:
         raise ValueError('Local evidence changed before commit; reread and replan')
     try:
         data = _write(presentation, op, resolved)
-        _target(bridge, expected)
+        rebind_after_write(bridge, expected, label='PowerPoint', message=WRITE_LOST)
+    except WriteOutcomeUnknown:
+        raise
     except Exception as exc:
         raise WriteOutcomeUnknown('Write attempted; partial/unknown outcome. No retry or rollback. ' + str(exc)) from exc
     return {**result, 'committed': True, 'data': data}

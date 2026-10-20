@@ -13,7 +13,7 @@ import re
 import subprocess
 import sys
 import time
-from word_com import WordBridge
+from office_com import OfficeBridge, normalized_hwnd
 
 MAX_CELLS = 10000
 MAX_CELLS_PER_COM_READ = 100
@@ -221,11 +221,6 @@ def read_property(tile, prop, rows, columns):
                 primary_error.add_note(f'COM result cleanup failed: {cleanup_error}')
 
 
-def normalized_hwnd(value):
-    """Excel exposes HWND as signed Long; normalize its 32-bit representation."""
-    return int(value) & 0xffffffff
-
-
 def matching_workbook(app, hwnd, limit=100):
     """Bind by workbook window handle, never ActiveWorkbook or caption guessing."""
     matches = []
@@ -246,7 +241,7 @@ def matching_workbook(app, hwnd, limit=100):
     return matches[0]
 
 
-class ExcelBridge(WordBridge):
+class ExcelBridge(OfficeBridge):
     # Reuse Win32 signatures/label/pid only; Word selection/attachment is not used.
     def windows(self):
         result = []

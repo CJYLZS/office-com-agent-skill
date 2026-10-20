@@ -31,6 +31,7 @@ import tempfile
 from pathlib import Path
 
 from excel_com import ExcelBridge, parse_address, read_range
+from office_com import WriteOutcomeUnknown, rebind, rebind_after_write
 
 MAX_CELLS = 100
 MAX_FORMULA_CHARS = 512
@@ -47,10 +48,6 @@ ALIGNMENTS = {
     'fill': 5, 'justify': -4130, 'center_across': 7, 'distributed': -4117,
 }
 SPILL_POLICIES = ('native', 'bounded_scalar_sheet')
-
-
-class WriteOutcomeUnknown(RuntimeError):
-    """A write began; inspect the live workbook before planning another one."""
 
 
 def _hash(obj):
@@ -428,15 +425,19 @@ def read_edit_range(wb, sheet, address, spill_policy='native'):
     }
 
 
-def _target(bridge, target):
+REFUSED = ('Workbook cannot be rebound natively ({stage}); no write attempted '
+           '(未尝试写入). Reread and replan: {error}')
+IDENTITY_CHANGED = ('Workbook identity changed ({stage}); no write attempted '
+                    '(未尝试写入). Reread and replan.')
+WRITE_LOST = ('Write attempted, but the workbook cannot be rebound afterwards, so the '
+              'outcome may be partial. Do not retry or undo automatically; inspect '
+              '{label} first: {error}')
+
+
+def _target(bridge, target, stage='读取前'):
     if not isinstance(target, dict) or target.get('application') != 'excel':
         raise ValueError('Full Excel target identity required')
-    wb, identity = bridge.select(
-        target.get('pid'), target.get('hwnd'), target.get('full_name')
-    )
-    if identity != target:
-        raise ValueError('Workbook identity mismatch')
-    return wb, identity
+    return rebind(bridge, target, stage, refusal=REFUSED, mismatch=IDENTITY_CHANGED)
 
 
 def _save_path(value):
@@ -708,7 +709,7 @@ def apply_request(bridge, request, commit=False):
     }
     if not commit:
         return result
-    wb, identity = _target(bridge, request['target'])
+    wb, identity = _target(bridge, request['target'], '提交前')
     if op['kind'] == 'save_copy':
         path = _save_path(op['path'])
         _save_preconditions(wb, path)
@@ -731,7 +732,7 @@ def apply_request(bridge, request, commit=False):
         raise ValueError('Target/evidence changed before commit')
     try:
         data = _write(wb, sh, op)
-        _target(bridge, request['target'])
+        rebind_after_write(bridge, request['target'], label='Excel', message=WRITE_LOST)
     except WriteOutcomeUnknown:
         raise
     except Exception as exc:
