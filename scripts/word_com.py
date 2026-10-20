@@ -14,6 +14,40 @@ def text_hash(text):
     return hashlib.sha256(text.encode('utf-8', errors='surrogatepass')).hexdigest()
 
 
+class WriteOutcomeUnknown(RuntimeError):
+    """A write was attempted; inspect the live document before another request."""
+
+
+def _rebind(bridge, identity, stage):
+    """Resolve the document again from native windows; never trust a cached object.
+
+    A failure here is a pre-write refusal: Windows handles are reused and a COM
+    reference does not prove the window still hosts the requested document.
+    """
+    if not isinstance(identity, dict):
+        raise ValueError('Word identity must be a dict for native rebinding')
+    if not hasattr(bridge, 'select'):
+        raise ValueError('bridge must provide select(pid, hwnd, document)')
+    try:
+        doc, current = bridge.select(identity.get('pid'), identity.get('hwnd'),
+                                     identity.get('full_name'))
+    except Exception as exc:
+        raise ValueError(f'目标无法原生重绑定（{stage}），未尝试写入；重新 list/read 后再规划: {exc}') from exc
+    if current != identity:
+        raise ValueError(f'原生身份不匹配（{stage}），未尝试写入；重新读取文档')
+    return doc
+
+
+def _rebind_after_write(bridge, identity):
+    try:
+        _rebind(bridge, identity, '写后')
+    except ValueError as exc:
+        raise WriteOutcomeUnknown(
+            '写入已尝试，但写后无法重新绑定原目标，可能有部分修改；'
+            '不自动重试或撤销，请先在 Word 中检查: ' + str(exc)
+        ) from exc
+
+
 def validate_request(req, identity, body_text):
     if req.get('target') != identity:
         raise ValueError('目标身份已改变；重新读取文档，不得自动重试写入')
@@ -189,8 +223,8 @@ def find_text(doc, text, limit=50):
     return {'matches': hits, 'limit_reached': len(hits) == limit}
 
 
-def apply_request(doc, identity, req, commit=False):
-    op = validate_request(req, identity, str(doc.Content.Text))
+def _preflight(doc, op):
+    """Reject unsupported targets and return the exact native range to edit."""
     if bool(doc.ReadOnly) or int(doc.ProtectionType) != -1:
         raise ValueError('只读或受保护的文档，拒绝编辑')
     if not 0 <= op['start'] <= op['end'] <= int(doc.Content.End) - 1:
@@ -206,15 +240,36 @@ def apply_request(doc, identity, req, commit=False):
             raise ValueError('表格内修改需要专用单元格接口')
         if op['start'] != op['end'] and int(rng.InlineShapes.Count):
             raise ValueError('范围含嵌入对象')
+    return rng
+
+
+def apply_request(doc, identity, req, commit=False, bridge=None):
+    """Preview by default; commit checks evidence once more, writes once, verifies.
+
+    With bridge, the target is resolved again from native windows before reading
+    and again before writing, and the fresh object is used for the write. A failed
+    pre-write resolution is a refusal: nothing was written. If the post-write
+    resolution fails, WriteOutcomeUnknown is raised because the document may have
+    changed or vanished mid-write. Without bridge the legacy signature keeps its
+    original, weaker evidence: the supplied identity is compared with itself.
+    """
+    if bridge is not None:
+        doc = _rebind(bridge, identity, '读取前')
+    op = validate_request(req, identity, str(doc.Content.Text))
+    rng = _preflight(doc, op)
     result = {'target': identity, 'operation': op, 'committed': False, 'saved_by_script': False}
     if not commit:
         return {**result, 'message': '预览完成；--commit 才会修改内存文档'}
+    if bridge is not None:
+        doc = _rebind(bridge, identity, '提交前')
+        rng = _preflight(doc, op)
     app = doc.Application
     undo = app.UndoRecord
     if bool(undo.IsRecordingCustomRecord):
         raise ValueError('Word 已在自定义撤销记录中，拒绝嵌套')
     previous_tracking = bool(doc.TrackRevisions)
-    started, modified = False, False
+    started = write_started = modified = False
+    failure = None
     try:
         undo.StartCustomRecord('AI Word collaboration')
         started = True
@@ -224,28 +279,57 @@ def apply_request(doc, identity, req, commit=False):
         validate_request(req, identity, str(doc.Content.Text))
         if str(rng.Text or '') != op['expected']:
             raise ValueError('提交前范围已改变')
+        write_started = True
         if op['kind'] in ('replace', 'insert'):
             rng.Text = op['text'].replace('\r\n', '\r').replace('\n', '\r')
-            modified = True
         elif op['kind'] == 'comment':
             doc.Comments.Add(rng, op['text'])
-            modified = True
         else:
             for key, value in op['font'].items():
                 setattr(rng.Font, {'bold': 'Bold', 'italic': 'Italic', 'name': 'Name', 'size': 'Size', 'color': 'Color'}[key], value)
-                modified = True
-        result.update(committed=True, text_sha256_after=text_hash(str(doc.Content.Text)),
+        modified = True
+        text_after = str(doc.Content.Text)
+        if bridge is not None:
+            # Only a fresh resolution can confirm this write landed on the same document.
+            _rebind_after_write(bridge, identity)
+        result.update(committed=True, text_sha256_after=text_hash(text_after),
                       message='已更新 Word 内存文档；脚本未调用保存，AutoSave 可能自行保存；可在 Word 中撤销')
         return result
+    except WriteOutcomeUnknown as exc:
+        failure = exc
+        raise
     except Exception as exc:
-        raise RuntimeError(f'提交失败，可能有部分修改（已确认修改={modified}）；不自动重试或撤销，请在 Word 检查：{exc}') from exc
+        # A refusal raised before any mutation stays a refusal, not an unknown write.
+        if not write_started:
+            failure = exc
+            raise
+        failure = WriteOutcomeUnknown(
+            f'提交结果未知，可能有部分修改（写入已发出，已完成={modified}）；'
+            f'不自动重试或撤销，请在 Word 检查：{exc}'
+        )
+        raise failure from exc
     finally:
+        # sys.exc_info() would also see a caller's handler, so track failure ourselves.
+        cleanup_error = None
         try:
-            if bool(doc.TrackRevisions) != previous_tracking:
-                doc.TrackRevisions = previous_tracking
-        finally:
-            if started:
-                undo.EndCustomRecord()
+            try:
+                if bool(doc.TrackRevisions) != previous_tracking:
+                    doc.TrackRevisions = previous_tracking
+            finally:
+                if started:
+                    undo.EndCustomRecord()
+        except Exception as exc:
+            cleanup_error = exc
+        if cleanup_error is not None:
+            if failure is not None:
+                if hasattr(failure, 'add_note'):
+                    failure.add_note('Word cleanup failed: ' + str(cleanup_error))
+            else:
+                # The edit may already be applied; a bare success would invite a retry.
+                raise WriteOutcomeUnknown(
+                    '写入已发出，但结束撤销记录或恢复修订设置失败；可能部分完成，'
+                    '不自动重试，请在 Word 检查: ' + str(cleanup_error)
+                ) from cleanup_error
 
 
 def main():
@@ -274,9 +358,9 @@ def main():
             if args.request is None:
                 raise ValueError('需要 --request JSON 文件')
             req = json.loads(args.request.read_text(encoding='utf-8-sig'))
-            target = req['target']
-            doc, identity = bridge.select(target['pid'], target['hwnd'], target['full_name'])
-            result = apply_request(doc, identity, req, args.commit)
+            # apply_request resolves the target itself; pre-selecting here would add a
+            # third window enumeration that contributes no evidence.
+            result = apply_request(None, req.get('target'), req, args.commit, bridge=bridge)
         else:
             doc, identity = bridge.select(args.pid, args.hwnd, args.document)
             if args.command == 'read':
@@ -297,7 +381,10 @@ def main():
         print(output)
         return 0
     except Exception as exc:
-        print(json.dumps({'error': str(exc), 'type': type(exc).__name__}, ensure_ascii=False), file=sys.stderr)
+        print(json.dumps({
+            'status': 'unknown' if isinstance(exc, WriteOutcomeUnknown) else 'error',
+            'error': str(exc), 'type': type(exc).__name__,
+        }, ensure_ascii=False), file=sys.stderr)
         return 1
 
 

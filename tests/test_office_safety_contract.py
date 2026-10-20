@@ -2,9 +2,10 @@
 
 Compose existing mock objects, not TestCases (no duplicated inherited suites).
 Only Excel's native VARIANT transport is patched; actual planning, evidence,
-structural guards, writes and verification execute. Word uses a supplied
-identity rather than a rebinding bridge and warns via generic RuntimeError.
-Native window ambiguity, Protected View, dialogs and timeouts need live tests.
+structural guards, writes and verification execute. Word resolves the target
+through a bridge stub like the other apps and reports partial writes through
+WriteOutcomeUnknown. Native window ambiguity, Protected View, dialogs, real
+timeouts and same-name multi-window binding still need live tests.
 """
 import copy
 from pathlib import Path
@@ -70,27 +71,53 @@ class WordDocument:
         return WordRange(self, start, end)
 
 
+class WordBridgeMock:
+    """Native window resolution stub; select() must be called again per rewrite."""
+
+    def __init__(self, doc, identity):
+        self.doc, self.identity = doc, dict(identity)
+        self.calls = 0
+        self.on_select = None
+        self.fail_on = None
+
+    def select(self, pid=None, hwnd=None, document=None):
+        self.calls += 1
+        if self.fail_on == self.calls:
+            raise RuntimeError("no native window for this target")
+        if self.on_select:
+            self.on_select(self.calls)
+        return self.doc, dict(self.identity)
+
+
 class WordFixture:
     name = "word"
-    unknown = RuntimeError  # Actual API warning, not a typed unknown status.
+    unknown = w.WriteOutcomeUnknown
     unknown_message = "可能有部分修改"
 
     def __init__(self):
         self.doc = WordDocument()
         self.target = dict(pid=11, hwnd=22, name="owned.docx", full_name="owned.docx")
         self.identity = dict(self.target)
+        self.bridge = WordBridgeMock(self.doc, self.identity)
         self.req = dict(target=dict(self.target), text_sha256=w.text_hash(self.doc.text),
                         operation=dict(kind="replace", start=0, end=5,
                                        expected="Hello", text="New"))
 
     def apply(self, commit=False):
-        return w.apply_request(self.doc, self.identity, self.req, commit=commit)
+        return w.apply_request(self.doc, self.identity, self.req, commit=commit,
+                               bridge=None if self.bridge is None else self.bridge)
 
     def change_evidence(self):
         self.doc.text = "Other world\r"
 
     def at_commit(self, callback):
         self.doc.on_start = callback
+
+    def at_rebind(self, callback):
+        self.bridge.on_select = lambda n: callback() if n == 2 else None
+
+    def native_identity(self):
+        return self.bridge.identity
 
     def fail_write(self):
         self.doc.fail_after_write = True
@@ -155,6 +182,12 @@ class ExcelFixture:
     def at_commit(self, callback):
         self.bridge.on_select = lambda n: callback() if n == 2 else None
 
+    def at_rebind(self, callback):
+        self.bridge.on_select = lambda n: callback() if n == 2 else None
+
+    def native_identity(self):
+        return self.bridge.identity
+
     def fail_write(self):
         self.sheet.cells[2, 2].__dict__["fail_after"] = True
 
@@ -200,6 +233,12 @@ class PowerPointFixture:
     def at_commit(self, callback):
         self.bridge.on_select = lambda n: callback() if n == 2 else None
 
+    def at_rebind(self, callback):
+        self.bridge.on_select = lambda n: callback() if n == 2 else None
+
+    def native_identity(self):
+        return self.bridge.target
+
     def fail_write(self):
         self.shape.TextFrame.TextRange.fail_after_write = True
 
@@ -239,8 +278,7 @@ class OfficeSafetyContractTests(unittest.TestCase):
                 if cls is WordFixture:
                     f.doc.undo.StartCustomRecord.assert_not_called()
                     f.doc.undo.EndCustomRecord.assert_not_called()
-                else:
-                    self.assertEqual(f.bridge.calls, 1)
+                self.assertEqual(f.bridge.calls, 1)
                 f.assert_no_lifecycle(self)
 
     def test_explicit_commit_positive_control_mutates_without_saving(self):
@@ -268,9 +306,11 @@ class OfficeSafetyContractTests(unittest.TestCase):
             with self.subTest(app=cls.name):
                 f = self.fixture(cls)
                 f.at_commit(f.change_evidence)
-                # Word wraps even pre-write failures inside its undo scope.
-                with self.assertRaises(RuntimeError if cls is WordFixture else ValueError):
+                # Word raises this inside its undo scope but before any mutation, so it
+                # must stay a refusal rather than being reported as an unknown write.
+                with self.assertRaises(ValueError) as error:
                     f.apply(commit=True)
+                self.assertNotIsInstance(error.exception, w.WriteOutcomeUnknown)
                 self.assertEqual(f.writes(), [])
                 f.assert_no_lifecycle(self)
                 if cls is WordFixture:
@@ -290,13 +330,13 @@ class OfficeSafetyContractTests(unittest.TestCase):
                     f.assert_no_lifecycle(self)
 
     def test_native_identity_rechecked_on_second_binding(self):
-        for cls in (ExcelFixture, PowerPointFixture):
+        for cls in (WordFixture, ExcelFixture, PowerPointFixture):
             for field in cls().target:
                 with self.subTest(app=cls.name, field=field):
                     f = self.fixture(cls)
-                    identity = f.bridge.identity if cls is ExcelFixture else f.bridge.target
+                    identity = f.native_identity()
                     value = identity[field]
-                    f.at_commit(lambda: identity.update({field: value + 1 if type(value) is int else value + ".other"}))
+                    f.at_rebind(lambda: identity.update({field: value + 1 if type(value) is int else value + ".other"}))
                     with self.assertRaises(ValueError):
                         f.apply(commit=True)
                     self.assertEqual(f.bridge.calls, 2)
@@ -304,7 +344,8 @@ class OfficeSafetyContractTests(unittest.TestCase):
                     f.assert_no_lifecycle(self)
 
     def test_commit_uses_freshly_bound_object_not_preview_object(self):
-        for cls, expected in ((ExcelFixture, [12, 34]), (PowerPointFixture, "New world")):
+        for cls, expected in ((WordFixture, "New world\r"), (ExcelFixture, [12, 34]),
+                              (PowerPointFixture, "New world")):
             with self.subTest(app=cls.name):
                 f = self.fixture(cls)
                 replacement = cls()
@@ -313,9 +354,11 @@ class OfficeSafetyContractTests(unittest.TestCase):
                 def replace_object():
                     if cls is ExcelFixture:
                         f.bridge.wb = replacement.doc
+                    elif cls is WordFixture:
+                        f.bridge.doc = replacement.doc
                     else:
                         f.bridge.presentation = replacement.doc
-                f.at_commit(replace_object)
+                f.at_rebind(replace_object)
                 self.assertTrue(f.apply(commit=True)["committed"])
                 self.assertEqual(f.writes(), [])
                 self.assertEqual(replacement.content(), expected)
@@ -383,11 +426,11 @@ class OfficeSafetyContractTests(unittest.TestCase):
                 self.assertEqual(f.writes(), [])
                 f.assert_no_lifecycle(self)
 
-    def test_excel_and_powerpoint_postwrite_identity_loss_is_unknown(self):
-        for cls in (ExcelFixture, PowerPointFixture):
+    def test_postwrite_identity_loss_is_unknown(self):
+        for cls in (WordFixture, ExcelFixture, PowerPointFixture):
             with self.subTest(app=cls.name):
                 f = self.fixture(cls)
-                identity = f.bridge.identity if cls is ExcelFixture else f.bridge.target
+                identity = f.native_identity()
                 f.bridge.on_select = lambda n: identity.update(hwnd=999) if n == 3 else None
                 with self.assertRaises(f.unknown):
                     f.apply(commit=True)
@@ -395,9 +438,67 @@ class OfficeSafetyContractTests(unittest.TestCase):
                 self.assertEqual(len(f.writes()), 2 if cls is ExcelFixture else 1)
                 f.assert_no_lifecycle(self)
 
-    @unittest.skip("Word apply_request accepts doc + supplied identity, not a native rebinding bridge")
-    def test_word_native_identity_rebinding_unsupported(self):
-        pass
+    def test_word_rebind_failure_is_prewrite_refusal_not_unknown(self):
+        f = self.fixture(WordFixture)
+        f.bridge.fail_on = 2
+        with self.assertRaises(ValueError) as error:
+            f.apply(commit=True)
+        self.assertNotIsInstance(error.exception, w.WriteOutcomeUnknown)
+        self.assertIn("未尝试写入", str(error.exception))
+        self.assertIsInstance(error.exception.__cause__, RuntimeError)
+        self.assertEqual(f.writes(), [])
+        f.doc.undo.StartCustomRecord.assert_not_called()
+        with self.assertRaises(ValueError):
+            w.apply_request(f.doc, "not-a-dict", f.req, True, bridge=f.bridge)
+        self.assertEqual(f.writes(), [])
+        f.assert_no_lifecycle(self)
+
+    def test_word_preview_rebinds_once_and_commit_resolves_again(self):
+        f = self.fixture(WordFixture)
+        f.apply()
+        self.assertEqual(f.bridge.calls, 1)
+        self.assertEqual(f.writes(), [])
+        f.bridge.calls = 0
+        self.assertTrue(f.apply(commit=True)["committed"])
+        self.assertEqual(f.bridge.calls, 3)
+        self.assertEqual(len(f.writes()), 1)
+
+    def test_word_without_bridge_keeps_legacy_signature_working(self):
+        f = self.fixture(WordFixture)
+        f.bridge = None
+        self.assertTrue(f.apply(commit=True)["committed"])
+        self.assertEqual(f.content(), "New world\r")
+
+    def test_word_legacy_partial_write_is_unknown_without_bridge(self):
+        f = self.fixture(WordFixture)
+        f.bridge = None
+        f.fail_write()
+        with self.assertRaises(w.WriteOutcomeUnknown):
+            f.apply(commit=True)
+        self.assertEqual(f.content(), "New world\r")
+
+    def test_word_cleanup_failure_after_write_is_unknown(self):
+        f = self.fixture(WordFixture)
+        f.doc.undo.EndCustomRecord.side_effect = RuntimeError("EndCustomRecord failed")
+        with self.assertRaises(w.WriteOutcomeUnknown) as error:
+            f.apply(commit=True)
+        self.assertEqual(len(f.writes()), 1)
+        self.assertEqual(f.content(), "New world\r")
+        self.assertIn("撤销记录", str(error.exception))
+        self.assertIsInstance(error.exception.__cause__, RuntimeError)
+
+    def test_word_cleanup_failure_does_not_inherit_outer_exception(self):
+        f = self.fixture(WordFixture)
+        f.doc.undo.EndCustomRecord.side_effect = RuntimeError("EndCustomRecord failed")
+        outer = ValueError("caller failure")
+        try:
+            raise outer
+        except ValueError:
+            # Inside a caller's handler, the cleanup error must not be swallowed.
+            with self.assertRaises(w.WriteOutcomeUnknown) as error:
+                f.apply(commit=True)
+        self.assertIsInstance(error.exception.__cause__, RuntimeError)
+        self.assertNotIn("Word cleanup failed", getattr(outer, "__notes__", []))
 
     @unittest.skip("PowerPoint has a ReadOnly guard, no separate protection/Protected View guard")
     def test_powerpoint_protected_view_contract_unsupported(self):

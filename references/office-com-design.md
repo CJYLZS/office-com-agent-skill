@@ -20,7 +20,7 @@ Word 既有入口保持兼容；Excel 与 PowerPoint 的新编辑层共享以下
 - 校验阶段拒绝表示本工具尚未尝试写入；WriteOutcomeUnknown 表示已尝试写入，结果可能部分完成。CLI status=unknown 或提交超时后，先读取当前状态，不能自动重试。
 - 另存副本独立请求，输出拒绝覆盖；原路径、原内存身份及 Saved 状态需复核。文件生成失败保留必要诊断，不能将文件存在视为成功。
 
-实际契约差异与未覆盖场景见 [能力与失败边界](office-safety-matrix.md)。Word 历史接口没有提交前后的原生身份重绑定，部分写入警告使用 RuntimeError；不得把新编辑层的全部保证套用于旧入口。
+实际契约差异与未覆盖场景见 [能力与失败边界](office-safety-matrix.md)。Word 的 CLI 与传入 bridge 的 apply_request 会在读取前、提交前和写后重新解析原生窗口；省略 bridge 的旧调用仍只比较身份副本与正文摘要，不能视为同等证据强度。部分写入现在抛出 WriteOutcomeUnknown（RuntimeError 子类），CLI 报告 status=unknown。
 
 ## 性能与故障
 

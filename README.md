@@ -10,7 +10,7 @@ AI agent skill for live Microsoft Office automation through Windows COM. Attach 
 
 | 应用 | 当前状态 | 下一步 |
 |---|---|---|
-| Word | 已实现连接、局部读取/查找、受限编辑与测试 | 持续完善复杂结构验证 |
+| Word | 连接、局部读取/查找、受限编辑、原生身份重绑定与结果未知状态 | 持续完善复杂结构验证 |
 | Excel | 窗口绑定、类型保真读取、值/公式/基础格式编辑、局部计算与另存副本 | 扩展受支持版本与复杂结构验证 |
 | PowerPoint | 身份绑定、分页读取、文本/格式编辑、模板页复制、文本框、删除、导出与另存副本 | 持续扩展复杂对象与布局验证 |
 
@@ -33,7 +33,7 @@ AI agent skill for live Microsoft Office automation through Windows COM. Attach 
 - [Excel 能力探测](scripts/excel_capabilities.py)：区分属性名解析、getter 可读和当前结构证据；通过 excel_tools.py capabilities 使用，不试写、不授权、不自动降级。
 - [跨应用安全回归](tests/test_office_safety_contract.py) 与 [能力与失败边界](references/office-safety-matrix.md)：明确已覆盖行为和仍未对齐的契约。
 
-本轮安全回归：单元测试共 117 项，115 项通过、2 项显式未支持跳过；能力探测 15 项、共用契约 15 项。真实自有文档回归：Word 9+5 组、Excel 11 组、PowerPoint 13 组通过。未覆盖的保护视图、模态对话框、Word 原生重绑定等不计为通过，详见 [能力与失败边界](references/office-safety-matrix.md)。
+本轮安全回归：单元测试共 122 项，121 项通过、1 项显式未支持跳过；能力探测 15 项、共用契约 20 项。真实自有文档回归：Word 11+5 组、Excel 11 组、PowerPoint 13 组通过。未覆盖的保护视图、模态对话框、Word 原生重绑定等不计为通过，详见 [能力与失败边界](references/office-safety-matrix.md)。
 
 ## 入库范围
 
