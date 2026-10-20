@@ -44,6 +44,28 @@ CodeName 必须与原生读取值完全一致。当前中文 Excel 对普通工�
 
 普通 CLI 使用 9 秒父进程 watchdog；import 函数和 --worker 入口没有硬超时。默认输出 UTF-8 JSON。成功退出码为 0；校验失败为 1；提交超时为 2，且 status=unknown。
 
+## 运行时能力探测（只读）
+
+~~~powershell
+& './.venv/Scripts/python.exe' scripts/excel_tools.py capabilities --pid <PID> --hwnd <HWND> --document 'D:/文档/示例.xlsx' --sheet 月度预算 --range A1:D4
+# 只有明确选择此策略时才检查完整小表标量证明；不自动降级：
+& './.venv/Scripts/python.exe' scripts/excel_tools.py capabilities --pid <PID> --hwnd <HWND> --document 'D:/文档/示例.xlsx' --sheet 月度预算 --range A1:D4 --spill-policy bounded_scalar_sheet
+~~~
+
+Python API 为 [probe_capabilities](../scripts/excel_capabilities.py)：
+probe_capabilities(wb, sheet_spec, address, spill_policy="native")。
+
+- runtime 记录真实 Version/Build，但不按版本推断动态数组支持。
+- sample.properties 分开返回 name_resolved、readable、read_error（含可取得的 HRESULT）；只抽样目标左上格的 Value2、Formula、Formula2、HasFormula、HasArray、HasSpill。
+- 从未调用 setter：write_tested=false、setter_supported=null。可读不代表可写，名称存在不代表 getter 可用。
+- safety 复用提交路径的结构检查，覆盖目标每格，返回 checks/blockers；bounded_scalar_sheet 还检查完整 UsedRange。检查通过也只表示当前结构证据清晰，不是编辑授权。
+- write_authorized=false、dynamic_arrays_validated=false 固定保守返回；不生成可供提交的摘要，不试写临时单元格，不更改应用设置，不自动换策略。
+- saved_before/after 只读观察保存状态；并发编辑仍可能使其变化。CLI 在读取后重新绑定目标；直接 import 无硬超时。
+- 探测报告不返回单元格值或公式正文；小表证明只保留已用范围、尺寸与公式数量，不返回公式列表。报告仍含工作表身份与结构元数据，只放忽略目录。
+- 历史编辑路径允许已确认的旧版 Excel 缺少 HasSpill；能力探测对这种版本假设额外给出 blocker，不把它描述为原生溢出证据。此诊断更保守，不修改旧版编辑行为。
+
+本机实测仍为 Excel 16.0 / Build 14026.0：Formula2、HasSpill 名称可解析，但 getter 返回 COMError / HRESULT -2147352567。native 明确给出 blocker；显式小表策略可通过独立证明，但不验证动态数组引擎。四格探测端到端含 Python 启动：最终复测 native 0.314 秒，小表策略 0.325 秒；这些是本次本机结果，不是所有工作簿的耗时保证。
+
 ## Python API
 
 - read_edit_range(wb, sheet_spec, address, spill_policy="native")：最多 100 格，返回原名/CodeName、A1 地址、值、类型、公式掩码、公式、相关格式、结构检查和 sha256。

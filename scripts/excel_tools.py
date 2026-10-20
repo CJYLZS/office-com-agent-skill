@@ -284,7 +284,7 @@ def _scalar_inventory(sh):
     }
 
 
-def _structure(wb, sh, rng, bounds, spill_policy):
+def _structure(wb, sh, rng, bounds, spill_policy, *, diagnostic=False):
     checks, blockers = {}, []
 
     def require_false(label, get):
@@ -359,11 +359,19 @@ def _structure(wb, sh, rng, bounds, spill_policy):
                     )
                 else:
                     blockers.append(f'cell[{row},{column}].HasSpill: unavailable')
-    if blockers:
+    if blockers and not diagnostic:
         raise ValueError('Structural safety checks failed: ' + ', '.join(blockers))
     checks['spill_policy'] = spill_policy
     if spill_policy == 'bounded_scalar_sheet':
-        checks['spill_proof'] = _scalar_inventory(sh)
+        try:
+            checks['spill_proof'] = _scalar_inventory(sh)
+        except Exception as exc:
+            if not diagnostic:
+                raise
+            blockers.append('bounded_scalar_inventory: ' + type(exc).__name__)
+    if diagnostic:
+        return {'checks': checks, 'blockers': blockers,
+                'checked_structure_clear': not blockers, 'write_authorized': False}
     return checks
 
 
@@ -739,7 +747,7 @@ def main(argv=None):
         if hasattr(stream, 'reconfigure'):
             stream.reconfigure(encoding='utf-8')
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('read', 'apply'))
+    parser.add_argument('command', choices=('read', 'capabilities', 'apply'))
     parser.add_argument('--request', type=Path)
     parser.add_argument('--pid', type=int)
     parser.add_argument('--hwnd', type=int)
@@ -773,7 +781,7 @@ def main(argv=None):
             return 2
     try:
         bridge = ExcelBridge()
-        if args.command == 'read':
+        if args.command in ('read', 'capabilities'):
             if (args.commit or args.pid is None or args.hwnd is None
                     or not args.sheet or not args.address):
                 raise ValueError(
@@ -781,7 +789,12 @@ def main(argv=None):
                 )
             wb, target = bridge.select(args.pid, args.hwnd, args.document)
             sh = wb.Worksheets.Item(args.sheet)
-            data = read_edit_range(
+            if args.command == 'capabilities':
+                from excel_capabilities import probe_capabilities
+                reader = probe_capabilities
+            else:
+                reader = read_edit_range
+            data = reader(
                 wb,
                 {'name': args.sheet, 'code_name': str(sh.CodeName)},
                 args.address,
@@ -803,7 +816,11 @@ def main(argv=None):
         print(json.dumps({
             'status': 'unknown' if isinstance(exc, WriteOutcomeUnknown) else 'error',
             'type': type(exc).__name__,
-            'error': str(exc),
+            'error': ('Capability probe failed; inspect error type/HRESULT; no writes.'
+                      if args.command == 'capabilities' else str(exc)),
+            **({'hresult': getattr(exc, 'hresult', None)}
+               if args.command == 'capabilities'
+               and type(getattr(exc, 'hresult', None)) is int else {}),
         }, ensure_ascii=False), file=sys.stderr)
         return 1
 

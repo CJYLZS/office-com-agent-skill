@@ -30,6 +30,11 @@ AI agent skill for live Microsoft Office automation through Windows COM. Attach 
 - [scripts/powerpoint_tools.py](scripts/powerpoint_tools.py) 与 [PowerPoint 交互编辑指南](references/powerpoint-editing.md)：分页读取、文本/格式编辑、复制页、文本框、导出与另存副本。
 - [tests/test_powerpoint_tools.py](tests/test_powerpoint_tools.py) 与 [tests/live_powerpoint_tools.py](tests/live_powerpoint_tools.py)：PowerPoint 编辑 mock 回归与真实 COM 编辑测试。
 
+- [Excel 能力探测](scripts/excel_capabilities.py)：区分属性名解析、getter 可读和当前结构证据；通过 excel_tools.py capabilities 使用，不试写、不授权、不自动降级。
+- [跨应用安全回归](tests/test_office_safety_contract.py) 与 [能力与失败边界](references/office-safety-matrix.md)：明确已覆盖行为和仍未对齐的契约。
+
+本轮安全回归：单元测试共 117 项，115 项通过、2 项显式未支持跳过；能力探测 15 项、共用契约 15 项。真实自有文档回归：Word 9+5 组、Excel 11 组、PowerPoint 13 组通过。未覆盖的保护视图、模态对话框、Word 原生重绑定等不计为通过，详见 [能力与失败边界](references/office-safety-matrix.md)。
+
 ## 入库范围
 
 仓库保留通用工具、技能指令、API 参考、可复现测试，以及经过提炼的用法和经验。scripts/ 中的工具应可跨文档复用，目标身份和任务内容通过参数或请求提供。

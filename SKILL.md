@@ -13,6 +13,8 @@ description: 在 Windows 中通过 Microsoft Office COM 连接已打开的 Word�
 
 Excel 编辑请求使用完整 target 和单项 operation，expected_sha256 来自同一局部读取。默认 spill_policy=native 要求原生 HasSpill 可读且为 False；当前本机读取该属性抛异常，必须显式选择 bounded_scalar_sheet，且整个 UsedRange 不超过 100 格、HasArray 全为 False、所有既有公式都在受限标量文法内。这个证明不等于 HasSpill=False，也不验证动态数组。文本写入使用长度计数 UTF-16 BSTR；空字符串用 null 清空。公式只接受局部算术和单个有界 SUM。格式失败或提交异常返回 WriteOutcomeUnknown，禁止重试、回滚或 Undo。另存副本不覆盖、不建父目录、不改变源 Saved 状态。
 
+编辑前可使用 scripts/excel_tools.py capabilities 对明确工作表/范围做只读能力探测：分别报告属性名能否解析、getter 是否可用，以及所选策略的结构 blocker。不得把 name_resolved/readable 当成 setter 支持或写许可；不自动切换策略。probe_capabilities 不生成提交摘要、不试写，动态数组验证始终未完成。
+
 ## PowerPoint 入口（读取与交互编辑）
 
 先阅读 [PowerPoint COM 指南](references/powerpoint-com-api.md)，使用 scripts/powerpoint_com.py 的 list/probe/read。明确 PID/HWND，按幻灯片与形状分页，表格和备注显式 --tables/--notes。连接优先 NativeOM，缺少 paneClassDC 时只把 ROT 当候选来源，再通过类型库早绑定 DocumentWindow.HWND 和 Win32 根窗口/PID 唯一匹配；不要按活动文稿或标题猜目标。类型库 getter 不可用就报错。组、图表、OLE、SmartArt 内部内容明确省略，不作完整布局或特性保真承诺。用户授权编辑时继续阅读 [交互编辑指南](references/powerpoint-editing.md)，使用 scripts/powerpoint_tools.py 的 read/apply。稳定 SlideID + Shape.Id 定位，文本预期值/摘要与有序 ID 列表提供局部冲突检查；默认预览，显式 --commit，写后复核。支持局部/全框文本、字体与几何、复制模板页并移动、新文本框、明确删除、PNG/JPG 导出与不覆盖的 SaveCopyAs。混合格式不能静默展平；不得自动保存原文件、重试、Undo、关闭或 Quit。

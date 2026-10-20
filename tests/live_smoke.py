@@ -65,4 +65,4 @@ try:
 finally:
     if doc is not None:
         doc.Close(0)
-    app.Quit(0)
+    # Application ownership is not implied by CreateObject; never Quit Office.

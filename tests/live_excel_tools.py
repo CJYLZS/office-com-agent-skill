@@ -188,8 +188,44 @@ def main(argv=None):
             assert report['data']['snapshot']['data']['values'] == [[99.0]]
             assert bool(wb.Saved) == before_cli
             passed.append('supervised_cli_read_under_9_seconds')
+            before_capabilities = read_range(attached, 'Data', 'B2:E2')['data']
+            before_saved = bool(wb.Saved)
+            capability_reports = {}
+            for probe_policy in ('native', 'bounded_scalar_sheet'):
+                cmd = [sys.executable, str(ROOT / 'scripts' / 'excel_tools.py'),
+                       'capabilities', '--pid', str(pid), '--hwnd', str(hwnd),
+                       '--document', str(wb.FullName), '--sheet', 'Data',
+                       '--range', 'B2:E2', '--spill-policy', probe_policy]
+                started = time.perf_counter()
+                proc = subprocess.run(cmd, capture_output=True, text=True,
+                                      encoding='utf-8', timeout=12)
+                elapsed = time.perf_counter() - started
+                assert proc.returncode == 0, proc.stderr or proc.stdout
+                assert elapsed < 10, elapsed
+                timings['supervised_capabilities_' + probe_policy] = round(elapsed, 3)
+                cap = json.loads(proc.stdout)
+                assert cap['target'] == target
+                cap = cap['data']
+                assert cap['write_authorized'] is False
+                assert cap['dynamic_arrays_validated'] is False
+                assert cap['saved_state_unchanged'] is True
+                assert cap['spill_policy'] == probe_policy
+                if 'legacy_version_assumption_not_native_spill_evidence' in cap['safety']['blockers']:
+                    assert not cap['safety']['checked_structure_clear'], cap
+                elif probe_policy == policy:
+                    assert cap['safety']['checked_structure_clear'], cap
+                if probe_policy == 'native' and policy != 'native':
+                    assert not cap['safety']['checked_structure_clear'], cap
+                for prop in cap['sample']['properties'].values():
+                    assert prop['write_tested'] is False
+                    assert prop['setter_supported'] is None
+                capability_reports[probe_policy] = cap
+            assert read_range(attached, 'Data', 'B2:E2')['data'] == before_capabilities
+            assert bool(wb.Saved) == before_saved
+            passed.append('read_only_capability_cli_policy_diagnostics_under_10_seconds')
             timings['total'] = round(time.perf_counter() - started_all, 3)
             print(json.dumps({'passed': passed, 'timings_seconds': timings,
+                              'capabilities': capability_reports,
                               'spill_policy': policy, 'user_workbooks_modified': False,
                               'application_quit_called': False}, ensure_ascii=False, indent=2))
         finally:
